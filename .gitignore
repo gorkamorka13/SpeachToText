@@ -35,3 +35,6 @@ dist-ssr
 build
 coverage
 .cache
+
+# Local Netlify folder
+.netlify
