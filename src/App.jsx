@@ -6,6 +6,9 @@ import { jsPDF } from "jspdf";
 import { GoogleGenAI } from "@google/genai";
 
 export default function SpeechToTextApp() {
+    // -----------------------------------------------------------------
+    // 1. ALL STATE DECLARATIONS
+    // -----------------------------------------------------------------
     const [isListening, setIsListening] = useState(false);
     const [transcript, setTranscript] = useState('');
     const [interimTranscript, setInterimTranscript] = useState('');
@@ -23,7 +26,14 @@ export default function SpeechToTextApp() {
     const [transcriptionMode, setTranscriptionMode] = useState('post'); // 'live' or 'post'
     const [autoAnalyze, setAutoAnalyze] = useState(true); // Toggle for chaining
     const [aiInstructions, setAiInstructions] = useState(() => {
-        return localStorage.getItem('aiInstructions') || 'Tu es un assistant intelligent. Analyse ce texte et fournis un résumé concis.';
+        return localStorage.getItem('aiInstructions') || `Corrige ce texte en:
+1)vérifiant l'orthographe,
+2)supprimant les espaces manquants entre les mots,
+3)supprimant les sauts de lignes inutiles,
+4)supprimant les retours à la ligne inutiles,
+5)supprimant les Carriage Return Line Feed et vérifie le texte
+6)identifiant des paragraphes dans ce texte et met le en forme
+et produit le fichier texte brut`;
     });
     const [aiModel, setAiModel] = useState(() => {
         return localStorage.getItem('aiModel') || 'gemini-2.0-flash';
@@ -34,6 +44,61 @@ export default function SpeechToTextApp() {
     const [darkMode, setDarkMode] = useState(() => {
         return localStorage.getItem('darkMode') === 'true';
     });
+    const [audioBlob, setAudioBlob] = useState(null);
+    const [autoStopSilence, setAutoStopSilence] = useState(true); // Default enabled as per user request
+    const [silenceCountdown, setSilenceCountdown] = useState(15);
+    const [volumeLevel, setVolumeLevel] = useState(0);
+    const [showSuccessModal, setShowSuccessModal] = useState(false);
+    const [errorLogs, setErrorLogs] = useState([]);
+
+    // Audio Settings
+    const [enableSystemAudio, setEnableSystemAudio] = useState(() => {
+        return localStorage.getItem('enableSystemAudio') === 'true'; // Default false
+    });
+
+    // -----------------------------------------------------------------
+    // 2. ALL REF DECLARATIONS
+    // -----------------------------------------------------------------
+    // Refs for state access in async closures
+    const transcriptRef = useRef('');
+    const aiResultRef = useRef('');
+    const translatedTranscriptRef = useRef('');
+    const audioBlobRef = useRef(null);
+    const errorLogsRef = useRef([]);
+    const autoAnalyzeRef = useRef(autoAnalyze); // Also sync autoAnalyze to be safe
+
+    const silenceTimerRef = useRef(null);
+    const silenceStartRef = useRef(null);
+    const isAutoSavingRef = useRef(false);
+    const analyserRef = useRef(null);
+    const audioContextRef = useRef(null); // Keep ref to close it
+    const dataArrayRef = useRef(null);
+    const animationFrameRef = useRef(null);
+
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
+    const streamsRef = useRef([]); // Keep track to stop tracks later
+
+    const recognitionRef = useRef(null);
+    const isListeningRef = useRef(false);
+
+    // Auto-scroll refs
+    const transcriptContainerRef = useRef(null);
+    const transcriptEndRef = useRef(null);
+    const aiResultContainerRef = useRef(null);
+    const lastInterimUpdateRef = useRef(0); // Moved to top level
+
+    // -----------------------------------------------------------------
+    // 3. INITIALIZATION & SYNC EFFECTS
+    // -----------------------------------------------------------------
+
+    // Sync Refs with State
+    useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
+    useEffect(() => { aiResultRef.current = aiResult; }, [aiResult]);
+    useEffect(() => { translatedTranscriptRef.current = translatedTranscript; }, [translatedTranscript]);
+    useEffect(() => { audioBlobRef.current = audioBlob; }, [audioBlob]);
+    useEffect(() => { errorLogsRef.current = errorLogs; }, [errorLogs]);
+    useEffect(() => { autoAnalyzeRef.current = autoAnalyze; }, [autoAnalyze]);
 
     // Toggle Dark Mode
     useEffect(() => {
@@ -52,12 +117,27 @@ export default function SpeechToTextApp() {
         setTimeout(() => setNotification(null), 3000); // Hide after 3 seconds
     };
 
-    // Save AI settings to localStorage
+    const logError = (message) => {
+        const timestamp = new Date().toISOString();
+        const logEntry = `[${timestamp}] ${message}`;
+        console.error(logEntry);
+        setErrorLogs(prev => [...prev, logEntry]);
+        showNotification("Erreur détectée (voir logs)");
+    };
 
-    // Audio Recording States
-    const [enableSystemAudio, setEnableSystemAudio] = useState(() => {
-        return localStorage.getItem('enableSystemAudio') === 'true'; // Default false
-    });
+    const downloadErrorLog = () => {
+        if (errorLogsRef.current.length === 0) {
+            showNotification("Aucun log d'erreur à sauvegarder.");
+            return;
+        }
+        const element = document.createElement('a');
+        const file = new Blob([errorLogsRef.current.join('\n')], { type: 'text/plain' });
+        element.href = URL.createObjectURL(file);
+        element.download = `error-log-${new Date().toISOString().slice(0, 10)}.txt`;
+        document.body.appendChild(element);
+        element.click();
+        document.body.removeChild(element);
+    };
 
     // Save app settings to localStorage
     useEffect(() => {
@@ -83,20 +163,9 @@ export default function SpeechToTextApp() {
         }
     }, [aiResult]);
 
-    const [audioBlob, setAudioBlob] = useState(null);
-    const mediaRecorderRef = useRef(null);
-    const audioChunksRef = useRef([]);
-    const streamsRef = useRef([]); // Keep track to stop tracks later
-
-    const recognitionRef = useRef(null);
-    const isListeningRef = useRef(false);
-
-    // Auto-scroll refs
-    const transcriptContainerRef = useRef(null);
-    const transcriptEndRef = useRef(null);
-    const aiResultContainerRef = useRef(null);
-    const lastInterimUpdateRef = useRef(0); // Moved to top level
-
+    // -----------------------------------------------------------------
+    // 4. BUSINESS LOGIC
+    // -----------------------------------------------------------------
     // Simulated Translation Map (Basic demonstration)
     const simulateTranslation = (text, targetLang) => {
         // In a real app, this would call Google Translate / DeepL API
@@ -116,11 +185,80 @@ export default function SpeechToTextApp() {
         };
     };
 
-    const transcribeAudioWithGemini = async () => {
-        if (!audioBlob) return;
+    // Helper to safely extract text from Gemini response (handles ALL SDK versions)
+    const extractTextFromResponse = (response) => {
+        if (!response) return "";
+
+        try {
+            // Unary response for @google/genai (new)
+            if (typeof response.text === 'string') return response.text;
+
+            // Response object for @google/generative-ai (classic)
+            if (typeof response.text === 'function') {
+                const text = response.text();
+                // If it's still a function or object, we need to dig deeper
+                if (typeof text === 'string') return text;
+            }
+
+            // Deep Candidate extraction (Shared Logic)
+            if (response.candidates && response.candidates[0]?.content?.parts) {
+                const parts = response.candidates[0].content.parts;
+                const text = parts.map(p => {
+                    // Parts can have .text directly or nested .text.text in some weird cases
+                    if (typeof p.text === 'string') return p.text;
+                    if (typeof p.text === 'object' && p.text?.text) return p.text.text;
+                    if (typeof p === 'string') return p;
+                    return '';
+                }).join('').trim();
+                if (text) return text;
+            }
+
+            // Choice-based extraction (OpenAI-compatible wrappers)
+            if (response.choices && response.choices[0]?.message?.content) {
+                return response.choices[0].message.content;
+            }
+
+            // Recursive Search (Fallback for unknown structures) - PROTECTED to return ONLY strings
+            const deepSearch = (obj, depth = 0) => {
+                if (depth > 5 || !obj || typeof obj !== 'object') return null;
+
+                // Prioritize common text keys
+                const keys = ['text', 'content', 'parts', 'candidates', 'choices', 'message'];
+                for (const key of keys) {
+                    const val = obj[key];
+                    if (typeof val === 'string' && val.trim().length > 0) return val;
+                    if (typeof val === 'object') {
+                        const found = deepSearch(val, depth + 1);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+
+            const fallbackText = deepSearch(response);
+            if (typeof fallbackText === 'string') return fallbackText;
+
+        } catch (e) {
+            console.error("Extraction error:", e);
+        }
+
+        // Final fallback: log structure and return empty string (NEVER an object)
+        console.warn("Gemini Response Structure Unknown:", response);
+        return "";
+    };
+
+    const transcribeAudioWithGemini = async (directBlob = null) => {
+        // Use directBlob if provided (from AutoSave) AND is a Blob, otherwise state blob
+        // This prevents the Click Event from being treated as a Blob when called via onClick
+        const blobToUse = (directBlob instanceof Blob) ? directBlob : audioBlob;
+
+        if (!blobToUse) {
+             logError("Aucun fichier audio à transcrire.");
+             return;
+        }
+
         setIsProcessingAI(true);
-        setAiResult(''); // Reuse AI result pane for status or debug? Or maybe just setTranscript?
-        // Let's setTranscript directly for the "Transcription" feature
+        if(!isAutoSavingRef.current) setAiResult('');
 
         try {
             const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -130,7 +268,7 @@ export default function SpeechToTextApp() {
 
             const client = new GoogleGenAI({ apiKey });
 
-            const audioPart = await fileToGenerativePart(audioBlob);
+            const audioPart = await fileToGenerativePart(blobToUse);
 
             const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
 
@@ -139,35 +277,51 @@ export default function SpeechToTextApp() {
                 contents: [{ role: 'user', parts: [{ text: prompt }, audioPart] }],
             });
 
-            const text = response.text;
+            const text = extractTextFromResponse(response);
+
             if (text) {
                 setTranscript(prev => prev + (prev ? ' ' : '') + text);
 
                 if (autoAnalyze) {
-                   showNotification("Transcription terminée ! Analyse IA en cours...");
+                   showNotification("Transcription audio terminée ! Analyse IA en cours...");
                    await processWithAI(text);
                 } else {
                    showNotification("Transcription terminée !");
+                   if (isAutoSavingRef.current) {
+                        finalizeAutoSave(null);
+                   }
                 }
+            } else {
+                throw new Error("Réponse de transcription vide (structure inconnue).");
             }
         } catch (error) {
             console.error("Gemini Audio Error:", error);
+            logError("Erreur Transcription Audio: " + error.message);
             showNotification("Erreur lors de la transcription audio Gemini: " + error.message);
+             if (isAutoSavingRef.current) {
+                 // Even if transcription fails, try to save audio/error logs
+                 finalizeAutoSave(null);
+            }
         } finally {
-            setIsProcessingAI(false);
+            if (!isAutoSavingRef.current) setIsProcessingAI(false); // If chaining, let processWithAI handle it
         }
     };
 
     // Real Google Gemini AI Processing (using new @google/genai SDK)
     // Refactored to accept optional text input for chaining
     const processWithAI = async (textOverride = null) => {
-        const textToAnalyze = textOverride || transcript;
-        if (!textToAnalyze) return;
+        // Prevent event propagation if called via onClick
+        if (textOverride && textOverride.stopPropagation) {
+            textOverride.stopPropagation();
+            textOverride.preventDefault();
+        }
 
-        // If called from chaining, we might already be 'processing', so we force true here anyway?
-        // Actually transcribeAudio sets processing=true, then calls this.
-        // We should manage loading state carefully.
-        // For simplicity, we keep it true.
+        const textToAnalyze = (typeof textOverride === 'string' ? textOverride : null) || transcript;
+        if (!textToAnalyze) {
+            if (isAutoSavingRef.current) logError("Auto-Save: Pas de texte à analyser.");
+            return;
+        }
+
         setIsProcessingAI(true);
         setAiResult('');
 
@@ -185,6 +339,8 @@ export default function SpeechToTextApp() {
             const prompt = `
 Instructions de l'utilisateur : ${aiInstructions}
 
+IMPORTANT : Ne jamais ajouter de texte introductif comme "Voici le texte corrigé" ou "Résultat :". Renvoie UNIQUEMENT le contenu demandé.
+
 Texte à analyser :
 "${textToAnalyze}"
             `;
@@ -194,20 +350,42 @@ Texte à analyser :
                 contents: [{ role: 'user', parts: [{ text: prompt }] }],
             });
 
-            const text = response.text;
+            const text = extractTextFromResponse(response);
 
             if (!text) {
-                console.log("Full response object:", response);
+                // console.log("Full response object:", response); // Removed to cleaner logs
                 throw new Error("Réponse vide de l'IA ou bloquée par les filtres de sécurité.");
             }
 
             setAiResult(text);
+
+            // Check if this was part of an Auto-Save chain
+            if (isAutoSavingRef.current) {
+                 finalizeAutoSave(text);
+            }
+
         } catch (error) {
-            console.error("Erreur AI:", error);
+            logError(`Erreur AI: ${error.message || error}`);
             setAiResult(`Erreur lors de l'analyse IA : ${error.message || "Erreur inconnue"}`);
+            // If failed, still try to save what we have
+             if (isAutoSavingRef.current) {
+                 finalizeAutoSave(null);
+            }
         } finally {
             setIsProcessingAI(false);
         }
+    };
+
+    const finalizeAutoSave = (aiText) => {
+        setTimeout(() => {
+            downloadPDF(); // Save PDF (now has columns!)
+            downloadTranscript();
+            downloadAudio();
+            if (errorLogsRef.current.length > 0) downloadErrorLog();
+
+            setShowSuccessModal(true); // Trigger Success Popup
+            isAutoSavingRef.current = false; // Reset flag
+        }, 500);
     };
 
     useEffect(() => {
@@ -369,21 +547,76 @@ Texte à analyser :
         streamsRef.current = [];
     };
 
+    const detectSilence = () => {
+        if (!analyserRef.current || !dataArrayRef.current) return;
+        analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+
+        // Calculate average volume
+        const array = dataArrayRef.current;
+        let values = 0;
+        const length = array.length;
+        for (let i = 0; i < length; i++) {
+            values += array[i];
+        }
+        const average = values / length;
+
+        // Update volume meter state
+        setVolumeLevel(average);
+
+        // Threshold for silence (adjustable, 10 is usually very quiet)
+        // Only run auto-stop logic if enabled
+        if (autoStopSilence) {
+            if (average < 10) {
+                if (!silenceStartRef.current) {
+                    silenceStartRef.current = Date.now();
+                } else {
+                    const silencedDuration = Date.now() - silenceStartRef.current;
+                    const remaining = Math.max(0, 15 - Math.floor(silencedDuration / 1000));
+                    setSilenceCountdown(remaining);
+
+                    if (silencedDuration > 15000) { // 15 seconds
+                        // Silence detected for 15s
+                        // Stop detection loop
+                        cancelAnimationFrame(animationFrameRef.current);
+
+                        showNotification("Silence détecté (15s). Arrêt et sauvegarde...");
+                        stopRecording(true); // Trigger auto-save
+                        setSilenceCountdown(15);
+                        return;
+                    }
+                }
+            } else {
+                // Reset silence timer if noise detected
+                silenceStartRef.current = null;
+                setSilenceCountdown(15);
+            }
+        }
+
+        if (isListeningRef.current) {
+            animationFrameRef.current = requestAnimationFrame(detectSilence);
+        }
+    };
+
     const startRecording = async () => {
         try {
             // 1. Start Speech Recognition ONLY if in 'live' mode
             if (transcriptionMode === 'live') {
-                recognitionRef.current.start();
+                try {
+                     recognitionRef.current.start();
+                } catch(e) { /* ignore already started */ }
             }
 
             setIsListening(true);
             isListeningRef.current = true; // Sync Ref
             setAudioBlob(null);
             audioChunksRef.current = [];
+            isAutoSavingRef.current = false; // Reset auto-save flag
 
             // 2. Setup Audio Recording (Mic + System)
             const streams = [];
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            audioContextRef.current = audioContext;
+
             const dest = audioContext.createMediaStreamDestination();
 
             // Mic Stream (Always needed for recording voice)
@@ -401,11 +634,23 @@ Texte à analyser :
                     streams.push(sysStream);
                 } catch (err) {
                     console.warn("System audio selection cancelled or failed:", err);
+                    logError("Audio système refusé/annulé.");
                     alert("Capture audio système annulée. Seul le microphone sera enregistré.");
                 }
             }
 
             streamsRef.current = streams;
+
+            // Audio Analysis Setup (Always setup for volume meter)
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            micSource.connect(analyser); // Connect mic to analyser
+            analyserRef.current = analyser;
+            dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
+            silenceStartRef.current = null;
+            setVolumeLevel(0); // Reset volume level
+
+            detectSilence(); // Start loop for volume and silence detection
 
             // 3. Create MediaRecorder with mixed stream
             const recorder = new MediaRecorder(dest.stream);
@@ -417,21 +662,63 @@ Texte à analyser :
             recorder.onstop = () => {
                 const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 setAudioBlob(blob);
-                audioContext.close(); // Clean up context
+
+                // Cleanup Utils
+                if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+                if (audioContextRef.current) audioContextRef.current.close();
+
+                // Trigger Chain if AutoSaving
+                if (isAutoSavingRef.current) {
+                    if (transcriptionMode === 'post') {
+                         // Post Mode: We need to transcribe first
+                         // We can't call transcribeAudioWithGemini directly easily because it reads audioBlob state which might not be set yet due to closure.
+                         // But we can pass the blob explicitly or wait for state.
+                         // Actually, setAudioBlob(blob) triggers re-render, but we need immediate action.
+                         // Let's call a modified transcribe with the blob directly.
+                         transcribeAudioWithGemini(blob);
+                    } else {
+                        // Live Mode: Transcript is already in state (mostly).
+                        if (autoAnalyzeRef.current) {
+                            showNotification("Auto-Save: Analyse IA en cours...");
+                            processWithAI();
+                        } else {
+                             // Skip analysis, just save what we have
+                             finalizeAutoSave(null);
+                        }
+                    }
+                }
             };
 
             recorder.start();
             mediaRecorderRef.current = recorder;
 
         } catch (err) {
-            console.error("Error starting recording:", err);
+            logError("Erreur startRecording: " + err.message);
             setIsListening(false);
             isListeningRef.current = false;
             alert("Erreur microphone/audio : " + (err.message || err));
         }
     };
 
-    const stopRecording = () => {
+    const stopRecording = (autoSave = false) => {
+        if (autoSave) {
+            isAutoSavingRef.current = true;
+        }
+
+        // Manual Stop Logic for Live Auto-Analyze
+        if (!autoSave && transcriptionMode === 'live' && autoAnalyzeRef.current) {
+            showNotification("Arrêt : Analyse IA automatique dans 1s...");
+            // Wait for potential final recognition results
+            setTimeout(() => {
+                const finalTranscript = transcriptRef.current;
+                if (finalTranscript && finalTranscript.trim()) {
+                     processWithAI(finalTranscript);
+                } else {
+                    showNotification("Pas de texte à analyser.");
+                }
+            }, 1000);
+        }
+
         // Stop recognition if it was running (live mode) or force stop just in case
         if (recognitionRef.current) {
              try {
@@ -440,14 +727,17 @@ Texte à analyser :
         }
 
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop();
+            mediaRecorderRef.current.stop(); // This triggers onstop -> handles autoSave logic
+        } else {
+             // If media recorder failed or wasn't running but we need to stop?
+             // Should not happen if isListening was true.
+             setIsListening(false);
+             isListeningRef.current = false;
         }
+
         stopMediaTracks();
         setIsListening(false);
         isListeningRef.current = false; // Sync Ref
-
-        // If in Post mode, we wait for mediaRecorder.onstop to set the blob,
-        // then the UI will show the "Transcribe" button automatically because blob exists & not listening
     };
 
     const toggleListening = () => {
@@ -464,8 +754,13 @@ Texte à analyser :
     };
 
     const downloadTranscript = () => {
+        const textToSave = transcriptRef.current;
+        if (!textToSave) {
+            showNotification("Pas de texte à sauvegarder.");
+            return;
+        }
         const element = document.createElement('a');
-        const file = new Blob([transcript], { type: 'text/plain' });
+        const file = new Blob([textToSave], { type: 'text/plain' });
         element.href = URL.createObjectURL(file);
         element.download = `transcription-${new Date().toISOString().slice(0, 10)}.txt`;
         document.body.appendChild(element);
@@ -474,8 +769,12 @@ Texte à analyser :
     };
 
     const downloadAudio = () => {
-        if (!audioBlob) return;
-        const url = URL.createObjectURL(audioBlob);
+        const blob = audioBlobRef.current;
+        if (!blob) {
+            console.warn("downloadAudio: No blob in Ref");
+            return;
+        }
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;
@@ -487,24 +786,76 @@ Texte à analyser :
     };
 
     const downloadPDF = () => {
-        if (!aiResult) return;
+        const currentTranscript = transcriptRef.current;
+        const currentAIResult = aiResultRef.current;
+        const currentTranslation = translatedTranscriptRef.current;
+
+        if (!currentTranscript && !currentAIResult) return;
 
         const doc = new jsPDF();
         const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
         const margin = 10;
-        const maxLineWidth = pageWidth - margin * 2;
-
+        const availableWidth = pageWidth - margin * 2;
         let yPosition = 20;
 
-        // AI Analysis ONLY
-        doc.setFontSize(12);
-        doc.setTextColor(0, 0, 0); // Black
+        doc.setFontSize(10);
+        doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "normal");
 
-        const splitAI = doc.splitTextToSize(aiResult, maxLineWidth);
-        doc.text(splitAI, margin, yPosition);
+        if (currentAIResult) {
+            // ONLY AI Result Mode
+            doc.setFontSize(14);
+            doc.setFont("helvetica", "bold");
+            doc.text("Encounter", margin, yPosition);
+            yPosition += 10;
 
-        doc.save(`analyse-ia-${new Date().toISOString().slice(0, 10)}.pdf`);
+            doc.setFontSize(11);
+            doc.setFont("helvetica", "normal");
+            const splitAI = doc.splitTextToSize(currentAIResult, availableWidth);
+
+            for(let i=0; i<splitAI.length; i++) {
+                if (yPosition > pageHeight - 20) {
+                    doc.addPage();
+                    yPosition = 20;
+                }
+                doc.text(splitAI[i], margin, yPosition);
+                yPosition += 6; // Line height for AI text
+            }
+        } else {
+            // Transcript Mode (Original + optional Translation)
+            if (enableTranslation) {
+                 const colWidth = (availableWidth / 2) - 5; // Gap of 10/2 = 5
+
+                 // Column Headers
+                 doc.setFont("helvetica", "bold");
+                 doc.text("Original", margin, yPosition);
+                 doc.text(`Traduction (${targetLanguage})`, margin + colWidth + 10, yPosition);
+                 yPosition += 7;
+                 doc.setFont("helvetica", "normal");
+
+                 const splitOriginal = doc.splitTextToSize(currentTranscript, colWidth);
+                 const splitTranslation = doc.splitTextToSize(currentTranslation, colWidth);
+
+                 const maxLines = Math.max(splitOriginal.length, splitTranslation.length);
+
+                 for(let i=0; i<maxLines; i++) {
+                     if (yPosition > pageHeight - 20) {
+                         doc.addPage();
+                         yPosition = 20;
+                     }
+                     if(splitOriginal[i]) doc.text(splitOriginal[i], margin, yPosition);
+                     if(splitTranslation[i]) doc.text(splitTranslation[i], margin + colWidth + 10, yPosition);
+                     yPosition += 5; // Line height
+                 }
+            } else {
+                // Single Column
+                const splitText = doc.splitTextToSize(currentTranscript, availableWidth);
+                doc.text(splitText, margin, yPosition);
+            }
+        }
+
+        doc.save(`export-${new Date().toISOString().slice(0, 10)}.pdf`);
         showNotification("Fichier PDF enregistré !");
     };
 
@@ -642,20 +993,24 @@ Texte à analyser :
                                 ))}
                             </select>
 
-                            <div className="hidden sm:flex items-center justify-center text-gray-400">
-                                <Languages className="w-5 h-5" />
-                            </div>
+{enableTranslation && (
+                                <div className="hidden sm:flex items-center justify-center text-gray-400">
+                                    <Languages className="w-5 h-5" />
+                                </div>
+                            )}
 
-                            <select
-                                value={targetLanguage}
-                                onChange={(e) => setTargetLanguage(e.target.value)}
-                                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm sm:text-base"
-                            >
-                                <option value="" disabled>Langue cible</option>
-                                {languages.map(lang => (
-                                    <option key={`target-${lang.code}`} value={lang.code}>{lang.name}</option>
-                                ))}
-                            </select>
+                            {enableTranslation && (
+                                <select
+                                    value={targetLanguage}
+                                    onChange={(e) => setTargetLanguage(e.target.value)}
+                                    className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm sm:text-base"
+                                >
+                                    <option value="" disabled>Langue cible</option>
+                                    {languages.map(lang => (
+                                        <option key={`target-${lang.code}`} value={lang.code}>{lang.name}</option>
+                                    ))}
+                                </select>
+                            )}
                         </div>
 
                         <div className="flex flex-col sm:flex-row gap-3 items-center justify-between w-full">
@@ -698,6 +1053,21 @@ Texte à analyser :
                                 <span className="sm:hidden">{enableSystemAudio ? 'Audio activé' : 'Audio désactivé'}</span>
                             </button>
 
+                            {/* Auto Stop Silence Toggle */}
+                             <button
+                                onClick={() => setAutoStopSilence(!autoStopSilence)}
+                                disabled={isListening}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 border ${autoStopSilence
+                                    ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800'
+                                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600'
+                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                title="Arrêter automatiquement après 15s de silence et sauvegarder"
+                            >
+                                <div className={`w-3 h-3 rounded-full ${autoStopSilence ? 'bg-red-500' : 'bg-gray-400'}`}></div>
+                                <span className="hidden sm:inline">Arrêt auto ({silenceCountdown}s)</span>
+                                <span className="sm:hidden">{silenceCountdown}s</span>
+                            </button>
+
                             <button
                                 onClick={toggleListening}
                                 className={`px-6 sm:px-8 py-3 rounded-lg font-semibold text-white transition-all duration-200 flex items-center gap-2 justify-center flex-1 sm:flex-initial ${isListening
@@ -718,6 +1088,42 @@ Texte à analyser :
                                 )}
                             </button>
                         </div>
+
+                        {/* Audio Level Meter */}
+                        {isListening && (
+                            <div className="w-full bg-gray-100 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-200 dark:border-gray-600 animate-in fade-in zoom-in duration-300">
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+                                        <div className="flex gap-0.5">
+                                            <div className="w-0.5 h-2 bg-purple-500 rounded-full animate-pulse" style={{ animationDelay: '0s' }}></div>
+                                            <div className="w-0.5 h-3 bg-purple-500 rounded-full animate-pulse" style={{ animationDelay: '0.1s' }}></div>
+                                            <div className="w-0.5 h-2 bg-purple-500 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
+                                        </div>
+                                        Niveau Signal
+                                    </span>
+                                    <span className="text-[10px] font-mono font-medium text-purple-600 dark:text-purple-400">
+                                        {Math.round((volumeLevel / 128) * 100)}%
+                                    </span>
+                                </div>
+                                <div className="w-full h-2 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden flex gap-0.5">
+                                    {/* Create a segmented LED-style meter */}
+                                    {[...Array(20)].map((_, i) => (
+                                        <div
+                                            key={i}
+                                            className={`h-full flex-1 rounded-sm transition-all duration-75 ${
+                                                (volumeLevel / 128) > (i / 20)
+                                                    ? i > 15
+                                                        ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'
+                                                        : i > 10
+                                                            ? 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.5)]'
+                                                            : 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]'
+                                                    : 'bg-gray-300 dark:bg-gray-900 border-none shadow-none'
+                                            }`}
+                                        ></div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Post-Processing Transcription Trigger */}
@@ -763,7 +1169,7 @@ Texte à analyser :
                         </div>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+<div className={`grid grid-cols-1 ${enableTranslation ? 'md:grid-cols-2' : ''} gap-4 mb-4`}>
                         {/* Source Text Pane */}
                         <div
                             ref={transcriptContainerRef}
@@ -797,7 +1203,8 @@ Texte à analyser :
                                 {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
                             </h2>
                             <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
-                                {transcript || <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
+                                {!transcript && !interimTranscript && <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
+                                {transcript}
                                 {interimTranscript && <span className="text-gray-400">{interimTranscript}</span>}
                             </div>
 
@@ -860,7 +1267,7 @@ Texte à analyser :
                         </button>
                         <button
                             onClick={downloadPDF}
-                            disabled={!aiResult}
+                            disabled={!transcript && !aiResult}
                             className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
                         >
                             <FileText className="w-4 h-4" />
@@ -890,6 +1297,15 @@ Texte à analyser :
                             <Trash2 className="w-4 h-4" />
                             Effacer
                         </button>
+                         {errorLogs.length > 0 && (
+                            <button
+                                onClick={downloadErrorLog}
+                                className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm sm:text-base"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-triangle"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                                Logs d'erreur ({errorLogs.length})
+                            </button>
+                        )}
                     </div>
 
                     {/* Audio Player for Verification */}
@@ -998,6 +1414,41 @@ Texte à analyser :
                 </div>
             )}
 
+            {/* Success Modal */}
+            {showSuccessModal && (
+                <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 max-w-sm w-full text-center border border-green-100 dark:border-green-900 transform scale-100 transition-all">
+                        <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-green-600 dark:text-green-400"><path d="M20 6 9 17l-5-5"/></svg>
+                        </div>
+                        <h2 className="text-2xl font-bold mb-2 text-gray-800 dark:text-white">Sauvegarde réussie !</h2>
+                        <p className="text-gray-600 dark:text-gray-300 mb-6">
+                            Tous les fichiers ont été générés et téléchargés avec succès.
+                        </p>
+                        <div className="space-y-2 text-sm text-gray-500 dark:text-gray-400 mb-6 bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg text-left">
+                            <div className="flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5"/></svg>
+                                Transcription (PDF)
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5"/></svg>
+                                Texte brut (.txt)
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5"/></svg>
+                                Audio (.webm)
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => setShowSuccessModal(false)}
+                            className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors shadow-lg hover:shadow-xl"
+                        >
+                            Fermer
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* Notification Toast */}
             {notification && (
                 <div className="fixed bottom-6 right-6 z-50 animate-bounce">
@@ -1011,7 +1462,7 @@ Texte à analyser :
             {/* Copyright Footer */}
             <div className="text-center mt-8 pb-4">
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Copyright Michel ESPARSA - 15/01/2025
+                    Copyright Michel ESPARSA - {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'Version Inconnue'}
                 </p>
             </div>
         </div>
