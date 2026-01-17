@@ -747,11 +747,27 @@ Texte à analyser :
                         </div>
                     )}
 
+                    {/* Auto-Analyze Toggle for Post Mode */}
+                    {transcriptionMode === 'post' && (
+                        <div className="mb-4 flex items-center gap-2">
+                             <input
+                                type="checkbox"
+                                id="autoAnalyze"
+                                checked={autoAnalyze}
+                                onChange={(e) => setAutoAnalyze(e.target.checked)}
+                                className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                            />
+                            <label htmlFor="autoAnalyze" className="text-sm font-medium text-gray-900 dark:text-gray-300">
+                                Analyse automatique après transcription
+                            </label>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         {/* Source Text Pane */}
                         <div
                             ref={transcriptContainerRef}
-                            className="bg-gray-50 rounded-lg p-6 overflow-y-auto relative border border-gray-200 h-[300px]"
+                            className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 h-64 overflow-y-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300 ${isListening ? 'ring-2 ring-purple-100 dark:ring-purple-900' : ''}`}
                         >
                             {isListening && (
                                 <div className="flex items-center gap-2 mb-4 text-red-500 sticky top-0 bg-gray-50 pb-2">
@@ -776,8 +792,6 @@ Texte à analyser :
                                     </button>
                                 )}
                             </div>
-                            className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 h-64 overflow-y-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300 ${isListening ? 'ring-2 ring-purple-100 dark:ring-purple-900' : ''}`}
-                        >
                             <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 flex justify-between items-center">
                                 <span>Transcription</span>
                                 {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
