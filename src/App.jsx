@@ -20,6 +20,8 @@ export default function SpeechToTextApp() {
 
     // AI Agent States
     const [showSettings, setShowSettings] = useState(false);
+    const [transcriptionMode, setTranscriptionMode] = useState('post'); // 'live' or 'post'
+    const [autoAnalyze, setAutoAnalyze] = useState(true); // Toggle for chaining
     const [aiInstructions, setAiInstructions] = useState(() => {
         return localStorage.getItem('aiInstructions') || 'Tu es un assistant intelligent. Analyse ce texte et fournis un résumé concis.';
     });
@@ -91,9 +93,9 @@ export default function SpeechToTextApp() {
 
     // Auto-scroll refs
     const transcriptContainerRef = useRef(null);
+    const transcriptEndRef = useRef(null);
     const aiResultContainerRef = useRef(null);
-
-
+    const lastInterimUpdateRef = useRef(0); // Moved to top level
 
     // Simulated Translation Map (Basic demonstration)
     const simulateTranslation = (text, targetLang) => {
@@ -103,11 +105,71 @@ export default function SpeechToTextApp() {
         return `[Traduction en ${targetLang}]: ${text}`;
     };
 
-    // Real Google Gemini AI Processing (using new @google/genai SDK)
-    const processWithAI = async () => {
-        if (!transcript) return;
+    const fileToGenerativePart = async (file) => {
+        const base64EncodedDataPromise = new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+            reader.readAsDataURL(file);
+        });
+        return {
+            inlineData: { data: await base64EncodedDataPromise, mimeType: file.type },
+        };
+    };
+
+    const transcribeAudioWithGemini = async () => {
+        if (!audioBlob) return;
         setIsProcessingAI(true);
-        setAiResult(''); // Clear previous result
+        setAiResult(''); // Reuse AI result pane for status or debug? Or maybe just setTranscript?
+        // Let's setTranscript directly for the "Transcription" feature
+
+        try {
+            const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+            if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
+                throw new Error("Clé API manquante");
+            }
+
+            const client = new GoogleGenAI({ apiKey });
+
+            const audioPart = await fileToGenerativePart(audioBlob);
+
+            const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
+
+            const response = await client.models.generateContent({
+                model: 'gemini-2.0-flash', // Use Flash for speed with audio
+                contents: [{ role: 'user', parts: [{ text: prompt }, audioPart] }],
+            });
+
+            const text = response.text;
+            if (text) {
+                setTranscript(prev => prev + (prev ? ' ' : '') + text);
+
+                if (autoAnalyze) {
+                   showNotification("Transcription terminée ! Analyse IA en cours...");
+                   await processWithAI(text);
+                } else {
+                   showNotification("Transcription terminée !");
+                }
+            }
+        } catch (error) {
+            console.error("Gemini Audio Error:", error);
+            showNotification("Erreur lors de la transcription audio Gemini: " + error.message);
+        } finally {
+            setIsProcessingAI(false);
+        }
+    };
+
+    // Real Google Gemini AI Processing (using new @google/genai SDK)
+    // Refactored to accept optional text input for chaining
+    const processWithAI = async (textOverride = null) => {
+        const textToAnalyze = textOverride || transcript;
+        if (!textToAnalyze) return;
+
+        // If called from chaining, we might already be 'processing', so we force true here anyway?
+        // Actually transcribeAudio sets processing=true, then calls this.
+        // We should manage loading state carefully.
+        // For simplicity, we keep it true.
+        setIsProcessingAI(true);
+        setAiResult('');
 
         try {
             const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -124,7 +186,7 @@ export default function SpeechToTextApp() {
 Instructions de l'utilisateur : ${aiInstructions}
 
 Texte à analyser :
-"${transcript}"
+"${textToAnalyze}"
             `;
 
             const response = await client.models.generateContent({
@@ -161,6 +223,8 @@ Texte à analyser :
         recognition.interimResults = true;
         recognition.lang = language;
 
+        // Removed invalid useRef call here
+
         recognition.onresult = (event) => {
             let finalTranscript = '';
             let currentInterimTranscript = '';
@@ -174,18 +238,43 @@ Texte à analyser :
                 }
             }
 
-            if (finalTranscript || currentInterimTranscript) {
+            if (finalTranscript) {
                 setTranscript(prev => prev + finalTranscript);
+                // Force update interim when final is received to ensure sync/clearing
                 setInterimTranscript(currentInterimTranscript);
+                lastInterimUpdateRef.current = Date.now();
+            } else {
+                // Throttle interim updates to ~200ms (5fps) to prevent layout thrashing
+                const now = Date.now();
+                if (now - lastInterimUpdateRef.current > 200) {
+                   setInterimTranscript(currentInterimTranscript);
+                    lastInterimUpdateRef.current = now;
+                }
             }
         };
 
         recognition.onerror = (event) => {
             console.error('Erreur de reconnaissance:', event.error);
             if (event.error === 'no-speech') {
-                return;
+                return; // Ignore, will auto-restart
             }
-            if (isListeningRef.current) stopRecording();
+            if (event.error === 'network') {
+                showNotification("Erreur réseau. Tentative de reconnexion...");
+                // Do NOT stops recording here. Let onend restart it.
+                return;
+            } else if (event.error === 'not-allowed') {
+                showNotification("Accès au micro refusé.");
+            } else if (event.error === 'service-not-allowed') {
+                showNotification("Service de reconnaissance vocal indisponible.");
+            } else {
+                showNotification(`Erreur: ${event.error}`);
+            }
+
+            // For fatal errors (not-allowed, etc), stop.
+            // Network errors returned early above, so they stay "listening"
+            if (isListeningRef.current) {
+                stopRecording();
+            }
         };
 
         recognition.onend = () => {
@@ -221,17 +310,55 @@ Texte à analyser :
         }
     }, [language]);
 
-    // Real-time translation effect
+    // Custom Debounce Hook
+    const useDebounce = (value, delay) => {
+        const [debouncedValue, setDebouncedValue] = useState(value);
+        useEffect(() => {
+            const handler = setTimeout(() => {
+                setDebouncedValue(value);
+            }, delay);
+            return () => {
+                clearTimeout(handler);
+            };
+        }, [value, delay]);
+        return debouncedValue;
+    };
+
+    const debouncedTranscript = useDebounce(transcript, 1000);
+    const debouncedInterimTranscript = useDebounce(interimTranscript, 800);
+
+    // Timer Logic
+    const [duration, setDuration] = useState(0);
+
+    useEffect(() => {
+        let interval;
+        if (isListening) {
+            interval = setInterval(() => {
+                setDuration(prev => prev + 1);
+            }, 1000);
+        } else {
+            setDuration(0);
+        }
+        return () => clearInterval(interval);
+    }, [isListening]);
+
+    const formatDuration = (seconds) => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    // Real-time translation effect (Debounced)
     useEffect(() => {
         if (!enableTranslation) {
             setTranslatedTranscript('');
             return;
         }
-        const fullText = transcript + interimTranscript;
+        const fullText = debouncedTranscript + debouncedInterimTranscript;
         if (fullText) {
             setTranslatedTranscript(simulateTranslation(fullText, targetLanguage));
         }
-    }, [transcript, interimTranscript, targetLanguage, enableTranslation]);
+    }, [debouncedTranscript, debouncedInterimTranscript, targetLanguage, enableTranslation]);
 
 
 
@@ -244,8 +371,11 @@ Texte à analyser :
 
     const startRecording = async () => {
         try {
-            // 1. Start Speech Recognition
-            recognitionRef.current.start();
+            // 1. Start Speech Recognition ONLY if in 'live' mode
+            if (transcriptionMode === 'live') {
+                recognitionRef.current.start();
+            }
+
             setIsListening(true);
             isListeningRef.current = true; // Sync Ref
             setAudioBlob(null);
@@ -302,13 +432,22 @@ Texte à analyser :
     };
 
     const stopRecording = () => {
-        if (recognitionRef.current) recognitionRef.current.stop();
+        // Stop recognition if it was running (live mode) or force stop just in case
+        if (recognitionRef.current) {
+             try {
+                recognitionRef.current.stop();
+            } catch(e) { /* ignore if not running */ }
+        }
+
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
         }
         stopMediaTracks();
         setIsListening(false);
         isListeningRef.current = false; // Sync Ref
+
+        // If in Post mode, we wait for mediaRecorder.onstop to set the blob,
+        // then the UI will show the "Transcribe" button automatically because blob exists & not listening
     };
 
     const toggleListening = () => {
@@ -519,7 +658,33 @@ Texte à analyser :
                             </select>
                         </div>
 
-                        <div className="flex flex-col sm:flex-row gap-3">
+                        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between w-full">
+                             {/* Mode Toggle */}
+                             <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg self-start sm:self-auto">
+                                <button
+                                    onClick={() => !isListening && setTranscriptionMode('live')}
+                                    disabled={isListening}
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                        transcriptionMode === 'live'
+                                            ? 'bg-white dark:bg-gray-600 text-purple-600 dark:text-purple-300 shadow-sm'
+                                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                    Live (Rapide)
+                                </button>
+                                <button
+                                    onClick={() => !isListening && setTranscriptionMode('post')}
+                                    disabled={isListening}
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                        transcriptionMode === 'post'
+                                            ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-300 shadow-sm'
+                                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                    Post (Précis)
+                                </button>
+                            </div>
+
                             <button
                                 onClick={() => setEnableSystemAudio(!enableSystemAudio)}
                                 disabled={isListening}
@@ -543,7 +708,7 @@ Texte à analyser :
                                 {isListening ? (
                                     <>
                                         <MicOff className="w-5 h-5" />
-                                        Arrêter
+                                        Arrêter ({formatDuration(duration)})
                                     </>
                                 ) : (
                                     <>
@@ -554,6 +719,33 @@ Texte à analyser :
                             </button>
                         </div>
                     </div>
+
+                    {/* Post-Processing Transcription Trigger */}
+                    {!isListening && audioBlob && transcriptionMode === 'post' && (
+                        <div className="mb-4 bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800 flex items-center justify-between animate-in fade-in slide-in-from-top-4 duration-300">
+                            <div>
+                                <h3 className="font-semibold text-blue-800 dark:text-blue-300">Prêt à transcrire ?</h3>
+                                <p className="text-sm text-blue-600 dark:text-blue-400">Audio enregistré ({formatDuration(duration)}). Utilisez l'IA pour une précision maximale.</p>
+                            </div>
+                            <button
+                                onClick={transcribeAudioWithGemini}
+                                disabled={isProcessingAI}
+                                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium shadow-md transition-colors flex items-center gap-2"
+                            >
+                                {isProcessingAI ? (
+                                    <>
+                                        <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
+                                        Traitement...
+                                    </>
+                                ) : (
+                                    <>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-zap"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                        Transcrire maintenant
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         {/* Source Text Pane */}
@@ -584,34 +776,32 @@ Texte à analyser :
                                     </button>
                                 )}
                             </div>
-                            {isListening ? (
-                                <p className="text-gray-800 whitespace-pre-wrap leading-relaxed text-lg">
-                                    {transcript}
-                                    <span className="text-gray-400 italic">{interimTranscript}</span>
-                                    {!transcript && !interimTranscript && 'Cliquez sur "Commencer" et parlez...'}
-                                </p>
-                            ) : (
-                                <textarea
-                                    value={transcript}
-                                    onChange={(e) => setTranscript(e.target.value)}
-                                    className="w-full h-[220px] p-2 bg-transparent border-0 focus:ring-0 text-gray-800 leading-relaxed text-lg resize-none placeholder-gray-400"
-                                    placeholder="Cliquez sur 'Commencer' et parlez, ou tapez votre texte ici..."
-                                />
-                            )}
-                            {interimTranscript && !isListening && (
-                                <p className="text-gray-400 italic mt-2 px-2 animate-pulse">
-                                    {interimTranscript}
-                                </p>
-                            )}
+                            className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 h-64 overflow-y-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300 ${isListening ? 'ring-2 ring-purple-100 dark:ring-purple-900' : ''}`}
+                        >
+                            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 flex justify-between items-center">
+                                <span>Transcription</span>
+                                {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
+                            </h2>
+                            <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
+                                {transcript || <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
+                                {interimTranscript && <span className="text-gray-400">{interimTranscript}</span>}
+                            </div>
+
+                            {/* Scroll Anchor */}
+                            <div ref={transcriptEndRef} />
                         </div>
 
-                        {/* Translated Text Pane */}
-                        <div className="bg-blue-50 dark:bg-blue-900/10 rounded-lg p-6 overflow-y-auto border border-blue-100 dark:border-blue-900/30 h-[300px]">
-                            <h3 className="text-xs font-semibold text-blue-400 dark:text-blue-300 uppercase tracking-wider mb-2">Traduction Instantanée</h3>
-                            <p className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed text-lg font-medium">
-                                {translatedTranscript || <span className="text-blue-300 dark:text-blue-500/50 italic">La traduction apparaîtra ici...</span>}
-                            </p>
-                        </div>
+                        {/* Translation Pane (Conditional) */}
+                        {enableTranslation && (
+                            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 h-64 overflow-y-auto border border-gray-100 dark:border-gray-700 relative">
+                                <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 text-purple-600 dark:text-purple-400">
+                                    Traduction instantanée ({targetLanguage})
+                                </h2>
+                                <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-medium">
+                                    {translatedTranscript || <span className="text-gray-400 italic">La traduction apparaîtra ici...</span>}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* AI Result Pane (Below Translation as requested) */}
