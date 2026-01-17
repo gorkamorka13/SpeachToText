@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-import { Mic, MicOff, Copy, Download, Trash2, Clock, Save, Languages, Speaker, FileAudio, FileText, Moon, Sun } from 'lucide-react';
+import { Mic, MicOff, Copy, Download, Trash2, Clock, Save, Languages, Speaker, FileAudio, FileText, Moon, Sun, Mail } from 'lucide-react';
 import { jsPDF } from "jspdf";
 
 import { GoogleGenAI } from "@google/genai";
@@ -49,6 +49,10 @@ et produit le fichier texte brut`;
     const [silenceCountdown, setSilenceCountdown] = useState(15);
     const [volumeLevel, setVolumeLevel] = useState(0);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
+    const [showEmailModal, setShowEmailModal] = useState(false);
+    const [hasDownloadedPDF, setHasDownloadedPDF] = useState(false);
+    const [emailRecipient, setEmailRecipient] = useState('');
+    const [emailSubject, setEmailSubject] = useState('Transcription Encounter');
     const [errorLogs, setErrorLogs] = useState([]);
 
     // Audio Settings
@@ -785,12 +789,12 @@ Texte à analyser :
         showNotification("Fichier Audio téléchargé !");
     };
 
-    const downloadPDF = () => {
+    const generatePDF = () => {
         const currentTranscript = transcriptRef.current;
         const currentAIResult = aiResultRef.current;
         const currentTranslation = translatedTranscriptRef.current;
 
-        if (!currentTranscript && !currentAIResult) return;
+        if (!currentTranscript && !currentAIResult) return null;
 
         const doc = new jsPDF();
         const pageWidth = doc.internal.pageSize.getWidth();
@@ -855,8 +859,36 @@ Texte à analyser :
             }
         }
 
+        return doc;
+    };
+
+    const downloadPDF = () => {
+        const doc = generatePDF();
+        if (!doc) return;
         doc.save(`export-${new Date().toISOString().slice(0, 10)}.pdf`);
         showNotification("Fichier PDF enregistré !");
+    };
+
+    const openEmailModal = () => {
+        const text = aiResultRef.current || transcriptRef.current;
+        if (!text) {
+            showNotification("Rien à envoyer.");
+            return;
+        }
+        setEmailSubject(`Ma Transcription - ${new Date().toLocaleDateString()}`);
+        setHasDownloadedPDF(false);
+        setShowEmailModal(true);
+    };
+
+    const sendEmail = () => {
+        const text = aiResultRef.current || transcriptRef.current;
+        const subject = encodeURIComponent(emailSubject);
+        const body = encodeURIComponent(text);
+        const recipient = encodeURIComponent(emailRecipient);
+
+        window.location.href = `mailto:${recipient}?subject=${subject}&body=${body}`;
+        setShowEmailModal(false);
+        showNotification("Ouverture de votre messagerie...");
     };
 
     const saveTranscript = () => {
@@ -1202,10 +1234,21 @@ Texte à analyser :
                                 <span>Transcription</span>
                                 {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
                             </h2>
-                            <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
-                                {!transcript && !interimTranscript && <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
-                                {transcript}
-                                {interimTranscript && <span className="text-gray-400">{interimTranscript}</span>}
+                            <div className="flex-1 flex flex-col">
+                                {isListening ? (
+                                    <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
+                                        {!transcript && !interimTranscript && <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
+                                        {transcript}
+                                        {interimTranscript && <span className="text-gray-400">{interimTranscript}</span>}
+                                    </div>
+                                ) : (
+                                    <textarea
+                                        className="w-full h-full min-h-[180px] bg-gray-50/50 dark:bg-gray-900/30 p-3 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-700 dark:text-gray-300 leading-relaxed font-sans text-base transition-all"
+                                        value={transcript}
+                                        onChange={(e) => setTranscript(e.target.value)}
+                                        placeholder="Le texte apparaîtra ici..."
+                                    />
+                                )}
                             </div>
 
                             {/* Scroll Anchor */}
@@ -1241,9 +1284,16 @@ Texte à analyser :
                                 ref={aiResultContainerRef}
                                 className="max-h-[200px] overflow-y-auto bg-gray-50 dark:bg-gray-900/50 p-4 rounded border border-gray-100 dark:border-gray-700"
                             >
-                                <p className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed font-mono text-sm">
-                                    {aiResult || <span className="text-purple-300 dark:text-purple-500/50 italic">Cliquez sur "Analyser avec IA" pour voir le résultat...</span>}
-                                </p>
+                                {!aiResult ? (
+                                    <span className="text-purple-300 dark:text-purple-500/50 italic">Cliquez sur "Analyser avec IA" pour voir le résultat...</span>
+                                ) : (
+                                    <textarea
+                                        value={aiResult}
+                                        onChange={(e) => setAiResult(e.target.value)}
+                                        className="w-full h-[180px] bg-white/50 dark:bg-gray-800/50 p-3 border border-purple-200/50 dark:border-purple-800/50 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed font-mono text-sm transition-all"
+                                        placeholder="Le résultat s'affichera ici..."
+                                    />
+                                )}
                             </div>
                         )}
                     </div>
@@ -1263,23 +1313,31 @@ Texte à analyser :
                             className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
                         >
                             <Download className="w-4 h-4" />
-                            Sauvegarde Texte
+                            Texte
                         </button>
                         <button
                             onClick={downloadPDF}
                             disabled={!transcript && !aiResult}
                             className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
                         >
-                            <FileText className="w-4 h-4" />
-                            Sauvegarde PDF
+                            <Download className="w-4 h-4" />
+                            PDF
                         </button>
                         <button
                             onClick={downloadAudio}
                             disabled={!audioBlob}
                             className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
                         >
-                            <FileAudio className="w-4 h-4" />
-                            Sauvegarde Audio
+                            <Download className="w-4 h-4" />
+                            Audio
+                        </button>
+                        <button
+                            onClick={openEmailModal}
+                            disabled={!transcript && !aiResult}
+                            className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm active:scale-95 text-sm sm:text-base"
+                        >
+                            <Mail className="w-4 h-4" />
+                            Email
                         </button>
                         <button
                             onClick={saveTranscript}
@@ -1287,7 +1345,7 @@ Texte à analyser :
                             className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
                             <Save className="w-4 h-4" />
-                            Sauvegarde historique
+                            Sauvegarde Historique
                         </button>
                         <button
                             onClick={clearTranscript}
@@ -1445,6 +1503,97 @@ Texte à analyser :
                         >
                             Fermer
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Email Transfer Modal - Assistant Workflow */}
+            {showEmailModal && (
+                <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-md w-full border border-purple-100 dark:border-purple-900/30">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center">
+                                <Mail className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                            </div>
+                            <h2 className="text-xl font-bold text-gray-800 dark:text-white">Assistant de Transfert Email</h2>
+                        </div>
+
+                        <div className="space-y-6">
+                            {/* Step 1: Download */}
+                            <div className={`p-4 rounded-xl border-2 transition-all ${hasDownloadedPDF ? 'bg-green-50/50 border-green-200 dark:bg-green-900/10 dark:border-green-800/50' : 'bg-purple-50/50 border-purple-200 dark:bg-purple-900/10 dark:border-purple-800/50'}`}>
+                                <div className="flex items-center justify-between mb-3">
+                                    <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${hasDownloadedPDF ? 'bg-green-500 text-white' : 'bg-purple-600 text-white'}`}>1</span>
+                                        Télécharger le PDF
+                                    </h3>
+                                    {hasDownloadedPDF && (
+                                        <span className="text-xs font-bold text-green-600 dark:text-green-400 flex items-center gap-1">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                                            Prêt !
+                                        </span>
+                                    )}
+                                </div>
+                                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                                    Le fichier doit être sur votre appareil pour l'attacher à votre e-mail.
+                                </p>
+                                <button
+                                    onClick={() => { downloadPDF(); setHasDownloadedPDF(true); }}
+                                    className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all ${hasDownloadedPDF ? 'bg-white dark:bg-gray-800 text-green-600 border border-green-200 dark:border-green-800' : 'bg-purple-600 text-white hover:bg-purple-700 shadow-md'}`}
+                                >
+                                    <FileText className="w-5 h-5" />
+                                    {hasDownloadedPDF ? 'Télécharger à nouveau' : 'Télécharger le PDF maintenant'}
+                                </button>
+                            </div>
+
+                            {/* Step 2: Prepare Email */}
+                            <div className={`p-4 rounded-xl border-2 transition-all ${hasDownloadedPDF ? 'bg-blue-50/50 border-blue-200 dark:bg-blue-900/10 dark:border-blue-800/50 opacity-100' : 'bg-gray-50 border-gray-100 dark:bg-gray-900/10 dark:border-gray-800/50 opacity-60'}`}>
+                                <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2 mb-4">
+                                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${hasDownloadedPDF ? 'bg-blue-600 text-white' : 'bg-gray-400 text-white'}`}>2</span>
+                                    Ouvrir votre Messagerie
+                                </h3>
+
+                                <div className="space-y-3">
+                                    <input
+                                        type="email"
+                                        value={emailRecipient}
+                                        onChange={(e) => setEmailRecipient(e.target.value)}
+                                        placeholder="Destinataire (optionnel)"
+                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={emailSubject}
+                                        onChange={(e) => setEmailSubject(e.target.value)}
+                                        placeholder="Objet de l'e-mail"
+                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                                    />
+                                </div>
+
+                                <div className="mt-4 p-3 bg-white/50 dark:bg-black/20 rounded-lg border border-blue-100 dark:border-blue-900/30">
+                                    <p className="text-[11px] text-blue-700 dark:text-blue-300 flex items-start gap-2 leading-tight">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                        Une fois la messagerie ouverte, cliquez sur l'icône trombone (pièce jointe) et sélectionnez le PDF qui vient d'être téléchargé.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-between items-center mt-8">
+                            <button
+                                onClick={() => setShowEmailModal(false)}
+                                className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm"
+                            >
+                                Fermer
+                            </button>
+                            <button
+                                onClick={sendEmail}
+                                disabled={!hasDownloadedPDF}
+                                className={`px-6 py-2 rounded-lg transition-all font-bold flex items-center gap-2 ${hasDownloadedPDF ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg scale-105' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+                            >
+                                <Mail className="w-5 h-5" />
+                                {hasDownloadedPDF ? 'Ouvrir Messagerie' : 'Télécharger PDF d\'abord'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
