@@ -60,6 +60,9 @@ et produit le fichier texte brut`;
         return localStorage.getItem('enableSystemAudio') === 'true'; // Default false
     });
 
+    const [isDragging, setIsDragging] = useState(false);
+    const [uploadedFile, setUploadedFile] = useState(null);
+
     // -----------------------------------------------------------------
     // 2. ALL REF DECLARATIONS
     // -----------------------------------------------------------------
@@ -91,6 +94,7 @@ et produit le fichier texte brut`;
     const transcriptEndRef = useRef(null);
     const aiResultContainerRef = useRef(null);
     const lastInterimUpdateRef = useRef(0); // Moved to top level
+    const fileInputRef = useRef(null);
 
     // -----------------------------------------------------------------
     // 3. INITIALIZATION & SYNC EFFECTS
@@ -184,8 +188,24 @@ et produit le fichier texte brut`;
             reader.onloadend = () => resolve(reader.result.split(',')[1]);
             reader.readAsDataURL(file);
         });
+
+        // Gemini is VERY strict about mimeType.
+        // 1. Strip codec parameters (e.g., "audio/webm;codecs=opus" -> "audio/webm")
+        let mimeType = file.type.split(';')[0].trim();
+
+        // 2. Map video/webm (common audio-only container) to audio/webm
+        if (mimeType === 'video/webm') mimeType = 'audio/webm';
+
+        // 3. Fallback for empty mimeType based on extension
+        if (!mimeType && file.name) {
+            const ext = file.name.split('.').pop().toLowerCase();
+            if (ext === 'mp3') mimeType = 'audio/mpeg';
+            else if (ext === 'wav') mimeType = 'audio/wav';
+            else if (ext === 'webm') mimeType = 'audio/webm';
+        }
+
         return {
-            inlineData: { data: await base64EncodedDataPromise, mimeType: file.type },
+            inlineData: { data: await base64EncodedDataPromise, mimeType: mimeType || 'audio/mpeg' },
         };
     };
 
@@ -746,9 +766,63 @@ Texte à analyser :
 
     const toggleListening = () => {
         if (!isListening) {
+            // Reset uploaded file if we start recording
+            setUploadedFile(null);
             startRecording();
         } else {
             stopRecording();
+        }
+    };
+
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const isAudio = file.type.startsWith('audio/') ||
+                        file.type === 'video/webm' ||
+                        file.name.toLowerCase().endsWith('.webm') ||
+                        file.name.toLowerCase().endsWith('.mp3') ||
+                        file.name.toLowerCase().endsWith('.wav');
+
+        if (isAudio) {
+            clearTranscript();
+            setUploadedFile(file);
+            setAudioBlob(file); // Set audioBlob so the player and Gemini can use it
+            showNotification(`Fichier "${file.name}" chargé`);
+        } else {
+            logError(`Fichier non reconnu (${file.type}). Veuillez sélectionner un fichier audio valide.`);
+        }
+    };
+
+    const handleDragOver = (e) => {
+        e.preventDefault();
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+
+        const isAudio = file.type.startsWith('audio/') ||
+                        file.type === 'video/webm' ||
+                        file.name.toLowerCase().endsWith('.webm') ||
+                        file.name.toLowerCase().endsWith('.mp3') ||
+                        file.name.toLowerCase().endsWith('.wav');
+
+        if (isAudio) {
+            clearTranscript();
+            setUploadedFile(file);
+            setAudioBlob(file); // Set audioBlob so the player and Gemini can use it
+            showNotification(`Fichier "${file.name}" déposé`);
+        } else {
+            logError(`Fichier non reconnu (${file.type}). Veuillez déposez un fichier audio valide.`);
         }
     };
 
@@ -1046,6 +1120,47 @@ Texte à analyser :
                         </div>
 
                         <div className="flex flex-col sm:flex-row gap-3 items-center justify-between w-full">
+                             {/* Drag & Drop Zone */}
+                             <div
+                                className={`flex-1 w-full p-4 border-2 border-dashed rounded-xl transition-all flex flex-col items-center justify-center gap-2 cursor-pointer ${
+                                    isDragging
+                                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                                    : 'border-gray-200 dark:border-gray-700 hover:border-purple-300 dark:hover:border-purple-700 bg-gray-50/50 dark:bg-gray-800/50'
+                                }`}
+                                onDragOver={handleDragOver}
+                                onDragLeave={handleDragLeave}
+                                onDrop={handleDrop}
+                                onClick={() => fileInputRef.current?.click()}
+                            >
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    onChange={handleFileSelect}
+                                    accept="audio/*"
+                                    className="hidden"
+                                />
+                                {uploadedFile ? (
+                                    <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400">
+                                        <FileAudio className="w-5 h-5" />
+                                        <span className="text-sm font-medium truncate max-w-[200px]">{uploadedFile.name}</span>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setUploadedFile(null); setAudioBlob(null); }}
+                                            className="p-1 hover:bg-purple-100 dark:hover:bg-purple-900/40 rounded-full"
+                                        >
+                                            <Trash2 className="w-4 h-4 text-red-500" />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm">
+                                            <Download className="w-5 h-5 text-purple-400" />
+                                            <span>Glissez un fichier audio ou <strong>cliquez ici</strong></span>
+                                        </div>
+                                        <p className="text-[10px] text-gray-400 uppercase tracking-widest">MP3, WAV, WebM supportés</p>
+                                    </>
+                                )}
+                             </div>
+
                              {/* Mode Toggle */}
                              <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg self-start sm:self-auto">
                                 <button
@@ -1162,8 +1277,15 @@ Texte à analyser :
                     {!isListening && audioBlob && transcriptionMode === 'post' && (
                         <div className="mb-4 bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800 flex items-center justify-between animate-in fade-in slide-in-from-top-4 duration-300">
                             <div>
-                                <h3 className="font-semibold text-blue-800 dark:text-blue-300">Prêt à transcrire ?</h3>
-                                <p className="text-sm text-blue-600 dark:text-blue-400">Audio enregistré ({formatDuration(duration)}). Utilisez l'IA pour une précision maximale.</p>
+                                <h3 className="font-semibold text-blue-800 dark:text-blue-300">
+                                    {uploadedFile ? "Fichier prêt" : "Prêt à transcrire ?"}
+                                </h3>
+                                <p className="text-sm text-blue-600 dark:text-blue-400">
+                                    {uploadedFile
+                                        ? `Fichier "${uploadedFile.name}" chargé.`
+                                        : `Audio enregistré (${formatDuration(duration)}).`}
+                                    Utilisez l'IA pour une précision maximale.
+                                </p>
                             </div>
                             <button
                                 onClick={transcribeAudioWithGemini}
