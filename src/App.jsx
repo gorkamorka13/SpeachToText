@@ -97,8 +97,8 @@ export default function SpeechToTextApp() {
     const [enableTranslation, setEnableTranslation] = useState(() => {
         return localStorage.getItem('enableTranslation') === 'true'; // Default false
     });
-    const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'fr-FR');
-    const [targetLanguage, setTargetLanguage] = useState(() => localStorage.getItem('targetLanguage') || 'en-US');
+    const [language, setLanguage] = useState('fr-FR');
+    const [targetLanguage, setTargetLanguage] = useState('en-US');
     const [savedTranscripts, setSavedTranscripts] = useState([]);
     const [isSupported, setIsSupported] = useState(true);
 
@@ -121,6 +121,7 @@ export default function SpeechToTextApp() {
     });
     const [aiResult, setAiResult] = useState('');
     const [isProcessingAI, setIsProcessingAI] = useState(false);
+    const [isTranscribing, setIsTranscribing] = useState(false);
     const [notification, setNotification] = useState(null);
     const [darkMode, setDarkMode] = useState(() => {
         return localStorage.getItem('darkMode') === 'true';
@@ -141,6 +142,8 @@ export default function SpeechToTextApp() {
     });
     const [speakingSection, setSpeakingSection] = useState(null); // 'transcript', 'translation', 'ai'
     const [errorLogs, setErrorLogs] = useState([]);
+    const [isRateLimited, setIsRateLimited] = useState(false);
+    const [retryDelay, setRetryDelay] = useState(0);
 
     // Audio Settings
     const [enableSystemAudio, setEnableSystemAudio] = useState(() => {
@@ -187,6 +190,33 @@ export default function SpeechToTextApp() {
     const aiResultContainerRef = useRef(null);
     const lastInterimUpdateRef = useRef(0); // Moved to top level
     const fileInputRef = useRef(null);
+
+    // Refs for auto-sizing textareas
+    const transcriptTextareaRef = useRef(null);
+    const aiTextareaRef = useRef(null);
+    const translationAreaRef = useRef(null);
+
+    // Auto-resize effect
+    useEffect(() => {
+        const resize = (ref) => {
+            if (ref.current) {
+                ref.current.style.height = 'auto';
+                ref.current.style.height = `${ref.current.scrollHeight}px`;
+            }
+        };
+        resize(transcriptTextareaRef);
+        resize(aiTextareaRef);
+        resize(translationAreaRef);
+    }, [transcript, aiResult, translatedTranscript, isListening, isTranscribing, isProcessingAI]);
+
+    // Ensure source and target languages are never the same
+    useEffect(() => {
+        if (language === targetLanguage) {
+            // If source became French, switch target to English, otherwise switch to French
+            setTargetLanguage(language === 'fr-FR' ? 'en-US' : 'fr-FR');
+        }
+    }, [language, targetLanguage]);
+
 
     // -----------------------------------------------------------------
     // 3. INITIALIZATION & SYNC EFFECTS
@@ -271,40 +301,76 @@ export default function SpeechToTextApp() {
         }
     }, [aiResult]);
 
-    const callGemini = async (model, contents) => {
+    const delay = (ms) => new Promise(res => setTimeout(res, ms));
+
+    const callGemini = async (model, contents, maxRetries = 3) => {
         const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        let attempt = 0;
 
-        // Check if we should use the Netlify function (Production or explicit testing)
-        // We try the function first if not local, or if we want to force server-side
-        if (!isLocal) {
+        while (attempt <= maxRetries) {
             try {
-                const resp = await fetch('/.netlify/functions/gemini', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model, contents })
-                });
+                // Check if we should use the Netlify function (Production or explicit testing)
+                // We try the function first if not local, or if we want to force server-side
+                if (!isLocal) {
+                    const resp = await fetch('/.netlify/functions/gemini', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model, contents })
+                    });
 
-                if (resp.ok) {
-                    return await resp.json();
+                    if (resp.ok) {
+                        setIsRateLimited(false);
+                        setRetryDelay(0);
+                        return await resp.json();
+                    } else {
+                        const errData = await resp.json();
+
+                        // Handle 429 Resource Exhausted
+                        if (resp.status === 429 || (errData.error && errData.error.includes("429"))) {
+                            throw { status: 429, message: errData.error || "Resource exhausted" };
+                        }
+
+                        console.error("Netlify Function Error:", errData);
+                    }
                 } else {
-                    const errData = await resp.json();
-                    console.error("Netlify Function Error:", errData);
-                    // If the function exists but failed (e.g. key missing on Netlify),
-                    // we might want to throw or fallback.
-                    // Fallback to client-side if a key is bundled.
+                    // Client-side fallback / Local Dev
+                    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+                    if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
+                        throw new Error("Clé API Gemini manquante. Veuillez configurer VITE_GEMINI_API_KEY.");
+                    }
+                    const client = new GoogleGenAI({ apiKey });
+                    const result = await client.models.generateContent({ model, contents });
+                    setIsRateLimited(false);
+                    setRetryDelay(0);
+                    return result;
                 }
             } catch (err) {
-                console.warn("Netlify function not reachable, trying client-side SDK:", err);
-            }
-        }
+                const isRateLimitError = err.status === 429 || (err.message && err.message.includes("429")) || (err.message && err.message.includes("RESOURCE_EXHAUSTED"));
 
-        // Client-side fallback / Local Dev
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
-            throw new Error("Clé API Gemini manquante. Veuillez configurer VITE_GEMINI_API_KEY.");
+                if (isRateLimitError && attempt < maxRetries) {
+                    attempt++;
+                    const waitTime = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                    console.warn(`Gemini API rate limited (429). Retry attempt ${attempt}/${maxRetries} in ${Math.round(waitTime)}ms...`);
+
+                    setIsRateLimited(true);
+                    setRetryDelay(Math.round(waitTime / 1000));
+
+                    // Update countdown every second
+                    const countdownInterval = setInterval(() => {
+                        setRetryDelay(prev => Math.max(0, prev - 1));
+                    }, 1000);
+
+                    await delay(waitTime);
+                    clearInterval(countdownInterval);
+                    continue;
+                }
+
+                setIsRateLimited(false);
+                setRetryDelay(0);
+                throw err;
+            }
+            attempt++;
         }
-        const client = new GoogleGenAI({ apiKey });
-        return await client.models.generateContent({ model, contents });
     };
 
     const handleSpeak = (text, section, langCode) => {
@@ -378,14 +444,7 @@ export default function SpeechToTextApp() {
             ]);
 
             // Track tokens
-            if (response.usageMetadata) {
-                const { promptTokenCount, candidatesTokenCount, totalTokenCount } = response.usageMetadata;
-                setTokenUsage(prev => ({
-                    lastPrompt: promptTokenCount,
-                    lastResponse: candidatesTokenCount,
-                    totalSession: prev.totalSession + totalTokenCount
-                }));
-            }
+            updateUsage(response);
 
             const translated = extractTextFromResponse(response);
             return translated || `[Erreur de traduction]`;
@@ -548,7 +607,31 @@ export default function SpeechToTextApp() {
         };
     };
 
-    // Helper to safely extract text from Gemini response (handles ALL SDK versions)
+    // Helper to extract token usage from response (highly robust)
+    const updateUsage = (response) => {
+        if (!response) return;
+
+        try {
+            // Priority: usageMetadata (standard genai response)
+            // Fallbacks: usage, usage_metadata, or root-level token counts
+            const m = response.usageMetadata || response.usage || response.usage_metadata || response;
+
+            const p = m.promptTokenCount ?? m.promptTokens ?? m.prompt_tokens ?? m.input_tokens ?? 0;
+            const r = m.candidatesTokenCount ?? m.completionTokens ?? m.completion_tokens ?? m.output_tokens ?? 0;
+            const t = m.totalTokenCount ?? m.totalTokens ?? m.total_tokens ?? (p + r);
+
+            if (p > 0 || r > 0) {
+                setTokenUsage(prev => ({
+                    lastPrompt: p,
+                    lastResponse: r,
+                    totalSession: prev.totalSession + t
+                }));
+            }
+        } catch (e) {
+            console.warn("Usage metadata extraction failed:", e);
+        }
+    };
+
     const extractTextFromResponse = (response) => {
         if (!response) return "";
 
@@ -621,6 +704,7 @@ export default function SpeechToTextApp() {
         }
 
         setIsProcessingAI(true);
+        setIsTranscribing(true);
         if (!isAutoSavingRef.current) setAiResult('');
 
         try {
@@ -632,23 +716,14 @@ export default function SpeechToTextApp() {
             ]);
 
             // Track tokens
-            if (response.usageMetadata) {
-                const { promptTokenCount, candidatesTokenCount, totalTokenCount } = response.usageMetadata;
-                setTokenUsage(prev => ({
-                    lastPrompt: promptTokenCount,
-                    lastResponse: candidatesTokenCount,
-                    totalSession: prev.totalSession + totalTokenCount
-                }));
-            }
+            updateUsage(response);
 
             const text = extractTextFromResponse(response);
 
             if (text) {
-                if (isAutoSavingRef.current) {
-                    setTranscript(text);
-                } else {
-                    setTranscript(prev => prev + (prev ? ' ' : '') + text);
-                }
+                // If we are in high-accuracy mode (post-processing),
+                // we overwrite the transcript with the result.
+                setTranscript(text);
 
                 if (autoAnalyze) {
                     showNotification("Transcription audio terminée ! Analyse IA en cours...");
@@ -671,6 +746,7 @@ export default function SpeechToTextApp() {
                 finalizeAutoSave(null);
             }
         } finally {
+            setIsTranscribing(false);
             if (!isAutoSavingRef.current) setIsProcessingAI(false); // If chaining, let processWithAI handle it
         }
     };
@@ -708,14 +784,7 @@ Texte à analyser :
             ]);
 
             // Track tokens
-            if (response.usageMetadata) {
-                const { promptTokenCount, candidatesTokenCount, totalTokenCount } = response.usageMetadata;
-                setTokenUsage(prev => ({
-                    lastPrompt: promptTokenCount,
-                    lastResponse: candidatesTokenCount,
-                    totalSession: prev.totalSession + totalTokenCount
-                }));
-            }
+            updateUsage(response);
 
             const text = extractTextFromResponse(response);
 
@@ -881,9 +950,8 @@ Texte à analyser :
             interval = setInterval(() => {
                 setDuration(prev => prev + 1);
             }, 1000);
-        } else {
-            setDuration(0);
         }
+        // Duration is NOT reset to 0 here so it persists in the UI after stopping
         return () => clearInterval(interval);
     }, [isListening]);
 
@@ -979,6 +1047,7 @@ Texte à analyser :
                 } catch (e) { /* ignore already started */ }
             }
 
+            setDuration(0); // Reset timer at start of recording
             setIsListening(true);
             isListeningRef.current = true; // Sync Ref
             setAudioBlob(null);
@@ -1638,7 +1707,7 @@ Texte à analyser :
                             <LanguageSelector
                                 value={language}
                                 onChange={setLanguage}
-                                languages={languages}
+                                languages={languages.filter(l => l.code !== targetLanguage)}
                                 disabled={isListening}
                             />
 
@@ -1651,7 +1720,7 @@ Texte à analyser :
                                     <LanguageSelector
                                         value={targetLanguage}
                                         onChange={setTargetLanguage}
-                                        languages={languages}
+                                        languages={languages.filter(l => l.code !== language)}
                                         className="flex-1"
                                     />
                                 </>
@@ -1842,200 +1911,244 @@ Texte à analyser :
                         </div>
                     )}
 
-                    {/* Auto-Analyze Toggle for Post Mode */}
-                    {transcriptionMode === 'post' && (
-                        <div className="mb-4 flex items-center gap-2">
-                            <input
-                                type="checkbox"
-                                id="autoAnalyze"
-                                checked={autoAnalyze}
-                                onChange={(e) => setAutoAnalyze(e.target.checked)}
-                                className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-                            />
-                            <label htmlFor="autoAnalyze" className="text-sm font-medium text-gray-900 dark:text-gray-300">
-                                Analyse automatique après transcription
-                            </label>
-                        </div>
-                    )}
-
-                    <div className={`grid grid-cols-1 ${enableTranslation ? 'md:grid-cols-2' : ''} gap-4 mb-4`}>
-                        {/* Source Text Pane */}
-                        <div
-                            ref={transcriptContainerRef}
-                            className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 h-64 overflow-y-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300 ${isListening ? 'ring-2 ring-purple-100 dark:ring-purple-900' : ''}`}
-                        >
-                            {isListening && (
-                                <div className="flex items-center gap-2 mb-4 text-red-500 sticky top-0 bg-gray-50 pb-2">
-                                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-                                    <span className="text-sm font-medium">
-                                        Écoute en cours
-                                        {enableSystemAudio && ' (+ Audio Système)'}
-                                        ...
-                                    </span>
+                    {/* Control Row: Shared Actions */}
+                    <div className="mb-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                        <div className="flex items-center gap-2">
+                            {transcriptionMode === 'post' && (
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        id="autoAnalyze"
+                                        checked={autoAnalyze}
+                                        onChange={(e) => setAutoAnalyze(e.target.checked)}
+                                        className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                                    />
+                                    <label htmlFor="autoAnalyze" className="text-sm font-medium text-gray-900 dark:text-gray-300">
+                                        Analyse automatique
+                                    </label>
                                 </div>
                             )}
-                            <div className="flex justify-between items-center mb-2">
-                                <div></div>
-                                {!isListening && transcript && (
-                                    <button
-                                        onClick={processWithAI}
-                                        disabled={isProcessingAI}
-                                        className="text-xs bg-purple-100 dark:bg-purple-500 text-purple-700 dark:text-white px-2 py-1 rounded hover:bg-purple-200 dark:hover:bg-purple-600 font-medium transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-sparkles"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></svg>
-                                        {isProcessingAI ? 'Analyse...' : 'Analyser avec IA'}
-                                    </button>
-                                )}
-                            </div>
-                            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 flex justify-between items-center">
-                                <span>Transcription Originale</span>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={() => copyToClipboard(transcript)}
-                                        className="p-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg shadow-sm hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
-                                        title="Copier la transcription"
-                                    >
-                                        <Copy className="w-5 h-5" />
-                                        <span className="text-[10px]">Copier</span>
-                                    </button>
-                                    <button
-                                        onClick={() => handleSpeak(transcript, 'transcript', language)}
-                                        className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'transcript'
-                                            ? 'bg-purple-600 text-white animate-pulse'
-                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'
-                                            }`}
-                                        title={speakingSection === 'transcript' ? "Arrêter la lecture" : "Lire la transcription"}
-                                    >
-                                        {speakingSection === 'transcript' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
-                                        <span className="text-[10px]">Lire</span>
-                                    </button>
-                                </div>
-                                {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
-                            </h2>
-                            <div className="flex-1 flex flex-col">
-                                {isListening ? (
-                                    <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
-                                        {!transcript && !interimTranscript && <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
-                                        {transcript}
-                                        {interimTranscript && <span className="text-gray-400">{interimTranscript}</span>}
-                                    </div>
-                                ) : (
-                                    <textarea
-                                        className="w-full h-full min-h-[180px] bg-gray-50/50 dark:bg-gray-900/30 p-3 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-700 dark:text-gray-300 leading-relaxed font-sans text-base transition-all"
-                                        value={transcript}
-                                        onChange={(e) => setTranscript(e.target.value)}
-                                        placeholder="Le texte apparaîtra ici..."
-                                    />
-                                )}
-                            </div>
-
-                            {/* Scroll Anchor */}
-                            <div ref={transcriptEndRef} />
                         </div>
 
-                        {/* Translation Pane (Conditional) */}
+                        <div className="flex gap-2">
+                            {!isListening && transcript && (
+                                <button
+                                    onClick={processWithAI}
+                                    disabled={isProcessingAI}
+                                    className="p-2 bg-white dark:bg-gray-800 text-purple-600 dark:text-purple-400 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-purple-500 hover:text-white transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={isProcessingAI ? 'Analyse en cours...' : 'Analyser avec l\'IA'}
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-sparkles"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></svg>
+                                    <span className="text-[10px] font-bold uppercase tracking-wider">{isProcessingAI ? 'Analyse...' : 'Analyser avec l\'IA'}</span>
+                                </button>
+                            )}
+                            <button
+                                onClick={() => copyToClipboard(transcript)}
+                                className="p-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
+                                title="Copier la transcription"
+                            >
+                                <Copy className="w-5 h-5" />
+                                <span className="text-[10px] font-bold uppercase tracking-wider">Copier</span>
+                            </button>
+                            <button
+                                onClick={() => handleSpeak(transcript, 'transcript', language)}
+                                className={`p-2 rounded-lg shadow-sm border font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'transcript'
+                                    ? 'bg-purple-600 text-white border-purple-500 animate-pulse'
+                                    : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-purple-500 hover:text-white'
+                                    }`}
+                                title={speakingSection === 'transcript' ? "Arrêter la lecture" : "Lire la transcription"}
+                            >
+                                {speakingSection === 'transcript' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
+                                <span className="text-[10px] font-bold uppercase tracking-wider">Lire</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className={`grid grid-cols-1 ${enableTranslation ? 'md:grid-cols-2' : ''} gap-4 mb-4`}>
+                        <div className="flex flex-col gap-2">
+                            <div className="flex items-center justify-between px-1">
+                                <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                                    <span>Transcription Originale</span>
+                                    {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
+                                </h2>
+
+                                {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
+                            </div>
+                            <div
+                                ref={transcriptContainerRef}
+                                className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 min-h-[80px] h-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300 ${isListening ? 'ring-2 ring-purple-100 dark:ring-purple-900 overflow-y-auto h-64' : ''}`}
+                            >
+                                {isListening && (
+                                    <div className="flex items-center gap-2 mb-4 text-red-500 sticky top-0 bg-gray-50 pb-2">
+                                        <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                                        <span className="text-sm font-medium">
+                                            Écoute en cours
+                                            {enableSystemAudio && ' (+ Audio Système)'}
+                                            ...
+                                        </span>
+                                    </div>
+                                )}
+                                <div className="flex-1 flex flex-col">
+                                    {isTranscribing ? (
+                                        <div className="flex items-center gap-2 text-purple-400 italic py-2">
+                                            <div className="animate-spin h-4 w-4 border-2 border-purple-500 border-t-transparent rounded-full"></div>
+                                            Transcription en cours...
+                                        </div>
+                                    ) : isListening ? (
+                                        <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-sans text-base">
+                                            {!transcript && !interimTranscript && <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
+                                            {transcript}
+                                            {interimTranscript && <span className="text-gray-400">{interimTranscript}</span>}
+                                        </div>
+                                    ) : (
+                                        <textarea
+                                            ref={transcriptTextareaRef}
+                                            className="w-full bg-gray-50/50 dark:bg-gray-900/30 p-3 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-700 dark:text-gray-300 leading-relaxed font-sans text-base transition-all overflow-hidden"
+                                            value={transcript}
+                                            onChange={(e) => setTranscript(e.target.value)}
+                                            placeholder="Le texte apparaîtra ici..."
+                                            rows={1}
+                                        />
+                                    )}
+                                </div>
+
+                                {/* Scroll Anchor */}
+                                <div ref={transcriptEndRef} />
+                            </div>
+                        </div>
+
                         {enableTranslation && (
-                            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 h-64 overflow-y-auto border border-gray-100 dark:border-gray-700 relative">
-                                <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 text-purple-600 dark:text-purple-400 flex items-center justify-between">
-                                    <span>Traduction instantanée ({targetLanguage})</span>
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-center justify-between px-1">
+                                    <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-2">
+                                        <span>Traduction instantanée ({targetLanguage})</span>
+                                    </h2>
                                     <div className="flex gap-2">
                                         <button
                                             onClick={() => copyToClipboard(translatedTranscript)}
-                                            className="p-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg shadow-sm hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
+                                            className="p-1 px-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1"
                                             title="Copier la traduction"
                                         >
-                                            <Copy className="w-5 h-5" />
-                                            <span className="text-[10px]">Copier</span>
+                                            <Copy className="w-4 h-4" />
+                                            <span className="text-[10px] font-bold uppercase tracking-wider">Copier</span>
                                         </button>
                                         <button
                                             onClick={() => handleSpeak(translatedTranscript, 'translation', targetLanguage)}
-                                            className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'translation'
-                                                ? 'bg-purple-600 text-white animate-pulse'
-                                                : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'
+                                            className={`p-1 px-2 rounded shadow-sm border font-semibold transition-all flex items-center gap-1 ${speakingSection === 'translation'
+                                                ? 'bg-purple-600 text-white border-purple-500 animate-pulse'
+                                                : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-purple-500 hover:text-white'
                                                 }`}
                                             title={speakingSection === 'translation' ? "Arrêter la lecture" : "Lire la traduction"}
                                         >
-                                            {speakingSection === 'translation' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
-                                            <span className="text-[10px]">Lire</span>
+                                            {speakingSection === 'translation' ? <Square className="w-4 h-4 fill-current" /> : <Volume2 className="w-4 h-4" />}
+                                            <span className="text-[10px] font-bold uppercase tracking-wider">Lire</span>
                                         </button>
                                     </div>
-                                </h2>
-                                <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-medium">
-                                    {translatedTranscript || <span className="text-gray-400 italic">La traduction apparaîtra ici...</span>}
+                                </div>
+                                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 min-h-[80px] h-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300">
+                                    <div
+                                        ref={translationAreaRef}
+                                        className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-sans text-base"
+                                    >
+                                        {translatedTranscript || <span className="text-gray-400 italic">La traduction apparaîtra ici...</span>}
+                                    </div>
                                 </div>
                             </div>
                         )}
                     </div>
 
-                    <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-purple-100 dark:border-purple-900/30 mb-4 min-h-[150px] shadow-sm">
-                        <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-xs font-semibold text-purple-500 dark:text-purple-400 uppercase tracking-wider flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bot"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
-                                Résultat de l'Agent IA
+                    {/* AI Control Row: Title & Actions */}
+                    <div className="mb-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                        <div className="flex flex-wrap items-center gap-4">
+                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bot text-purple-600 dark:text-purple-400"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
+                                <span className="text-purple-600 dark:text-purple-400">Résultat de l'Agent IA</span>
                             </h3>
-                            <div className="flex gap-2">
+
+                            {/* Integrated Token Counter */}
+                            <div className="flex flex-wrap items-center gap-3 text-[10px] font-medium uppercase tracking-wider border-l border-gray-200 dark:border-gray-700 pl-4 ml-2">
+                                <div className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500" title={`P:${tokenUsage.lastPrompt || 0} R:${tokenUsage.lastResponse || 0}`}>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400/50"></span>
+                                    Dernier : <span className="text-purple-600 dark:text-purple-400 font-bold">{(tokenUsage.lastPrompt || 0) + (tokenUsage.lastResponse || 0)}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400/50"></span>
+                                    Session : <span className="text-blue-600 dark:text-blue-400 font-bold">{tokenUsage.totalSession || 0}</span>
+                                </div>
                                 <button
-                                    onClick={() => copyToClipboard(aiResult)}
-                                    className="p-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg shadow-sm hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
-                                    title="Copier le résultat"
+                                    onClick={resetTokenUsage}
+                                    className="text-[10px] text-gray-400 hover:text-red-400 transition-colors flex items-center gap-1 ml-1"
+                                    title="Réinitialiser le compteur de session"
                                 >
-                                    <Copy className="w-5 h-5" />
-                                    <span className="text-[10px]">Copier</span>
-                                </button>
-                                <button
-                                    onClick={() => handleSpeak(aiResult, 'ai', language)}
-                                    className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'ai' ? 'bg-purple-600 text-white animate-pulse' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'}`}
-                                    title={speakingSection === 'ai' ? "Arrêter la lecture" : "Lire le résultat"}
-                                >
-                                    {speakingSection === 'ai' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
-                                    <span className="text-[10px]">Lire</span>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-refresh-cw"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /></svg>
                                 </button>
                             </div>
                         </div>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => copyToClipboard(aiResult)}
+                                className="p-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
+                                title="Copier le résultat"
+                            >
+                                <Copy className="w-5 h-5" />
+                                <span className="text-[10px] font-bold uppercase tracking-wider">Copier</span>
+                            </button>
+                            <button
+                                onClick={() => handleSpeak(aiResult, 'ai', language)}
+                                className={`p-2 rounded-lg shadow-sm border font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'ai'
+                                    ? 'bg-purple-600 text-white border-purple-500 animate-pulse'
+                                    : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-purple-500 hover:text-white'
+                                    }`}
+                                title={speakingSection === 'ai' ? "Arrêter la lecture" : "Lire le résultat"}
+                            >
+                                {speakingSection === 'ai' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
+                                <span className="text-[10px] font-bold uppercase tracking-wider">Lire</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 min-h-[80px] h-auto border border-gray-100 dark:border-gray-700 relative mb-4 transition-all duration-300">
+                        {isRateLimited && (
+                            <div className="mb-4 bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg border border-amber-200 dark:border-amber-800 flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                                <div className="flex-shrink-0">
+                                    <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400 animate-pulse" />
+                                </div>
+                                <div className="flex-1">
+                                    <h4 className="text-sm font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider">Limite API atteinte</h4>
+                                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                                        Trop de requêtes. Nouvelle tentative dans <span className="font-mono font-bold text-base ml-1">{retryDelay}s</span>...
+                                    </p>
+                                </div>
+                                <div className="flex gap-1">
+                                    {[...Array(3)].map((_, i) => (
+                                        <div key={i} className="w-1 h-1 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.1}s` }}></div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         {isProcessingAI ? (
                             <div className="flex items-center gap-2 text-purple-400 italic">
                                 <div className="animate-spin h-4 w-4 border-2 border-purple-500 border-t-transparent rounded-full"></div>
                                 Analyse en cours...
                             </div>
                         ) : (
-                            <div
-                                ref={aiResultContainerRef}
-                                className="max-h-[200px] overflow-y-auto bg-gray-50 dark:bg-gray-900/50 p-4 rounded border border-gray-100 dark:border-gray-700"
-                            >
+                            <div className="flex-1 flex flex-col">
                                 {!aiResult ? (
                                     <span className="text-purple-300 dark:text-purple-500/50 italic">Cliquez sur "Analyser avec IA" pour voir le résultat...</span>
                                 ) : (
                                     <textarea
+                                        ref={aiTextareaRef}
                                         value={aiResult}
                                         onChange={(e) => setAiResult(e.target.value)}
-                                        className="w-full h-[180px] bg-white/50 dark:bg-gray-800/50 p-3 border border-purple-200/50 dark:border-purple-800/50 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed font-mono text-sm transition-all"
+                                        className="w-full bg-white/50 dark:bg-gray-800/50 p-3 border border-purple-200/50 dark:border-purple-800/50 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed font-mono text-sm transition-all overflow-hidden"
                                         placeholder="Le résultat s'affichera ici..."
+                                        rows={1}
                                     />
                                 )}
                             </div>
                         )}
 
-                        {/* Token Counter UI */}
-                        <div className="mt-3 pt-3 border-t border-purple-50 sm:border-purple-100/50 dark:border-purple-900/20 flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex flex-wrap items-center gap-4 text-[10px] sm:text-xs font-medium uppercase tracking-wider">
-                                <div className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400/50"></span>
-                                    Dernier : <span className="text-purple-600 dark:text-purple-400 font-bold">{tokenUsage.lastPrompt + tokenUsage.lastResponse}</span> <span className="opacity-60">(P:{tokenUsage.lastPrompt} R:{tokenUsage.lastResponse})</span>
-                                </div>
-                                <div className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400/50"></span>
-                                    Session : <span className="text-blue-600 dark:text-blue-400 font-bold">{tokenUsage.totalSession}</span>
-                                </div>
-                            </div>
-                            <button
-                                onClick={resetTokenUsage}
-                                className="text-[10px] sm:text-xs text-gray-400 hover:text-red-400 transition-colors flex items-center gap-1"
-                                title="Réinitialiser le compteur de session"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-refresh-cw"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /></svg>
-                                Réinitialiser
-                            </button>
-                        </div>
+
                     </div>
 
                     <div className="flex flex-wrap gap-2 sm:gap-3">
@@ -2383,6 +2496,7 @@ Texte à analyser :
                     Copyright Michel ESPARSA - {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'Version Inconnue'}
                 </p>
             </div>
-        </div >
+        </div>
     );
 }
+

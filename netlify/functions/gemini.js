@@ -37,8 +37,9 @@ export const handler = async (event) => {
         };
     } catch (error) {
         console.error("Netlify Function [gemini] Error:", error);
+        const isRateLimit = error.message && (error.message.includes("429") || error.message.includes("RESOURCE_EXHAUSTED"));
         return {
-            statusCode: 500,
+            statusCode: isRateLimit ? 429 : 500,
             body: JSON.stringify({ error: error.message }),
             headers: { 'Content-Type': 'application/json' }
         };
