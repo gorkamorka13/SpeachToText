@@ -192,10 +192,42 @@ export default function SpeechToTextApp() {
         }
     }, [aiResult]);
 
-    // -----------------------------------------------------------------
-    // 4. BUSINESS LOGIC
-    // -----------------------------------------------------------------
-    // Simulated Translation Map (Basic demonstration)
+    const callGemini = async (model, contents) => {
+        const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+        // Check if we should use the Netlify function (Production or explicit testing)
+        // We try the function first if not local, or if we want to force server-side
+        if (!isLocal) {
+            try {
+                const resp = await fetch('/.netlify/functions/gemini', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model, contents })
+                });
+
+                if (resp.ok) {
+                    return await resp.json();
+                } else {
+                    const errData = await resp.json();
+                    console.error("Netlify Function Error:", errData);
+                    // If the function exists but failed (e.g. key missing on Netlify),
+                    // we might want to throw or fallback.
+                    // Fallback to client-side if a key is bundled.
+                }
+            } catch (err) {
+                console.warn("Netlify function not reachable, trying client-side SDK:", err);
+            }
+        }
+
+        // Client-side fallback / Local Dev
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
+            throw new Error("Clé API Gemini manquante. Veuillez configurer VITE_GEMINI_API_KEY.");
+        }
+        const client = new GoogleGenAI({ apiKey });
+        return await client.models.generateContent({ model, contents });
+    };
+
     const handleSpeak = (text, section, langCode) => {
         if (speakingSection === section) {
             window.speechSynthesis.cancel();
@@ -246,16 +278,11 @@ export default function SpeechToTextApp() {
     const translateWithGemini = async (text, sourceLang, targetLang) => {
         if (!text) return '';
         try {
-            const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-            if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') return `[Erreur API]`;
-
-            const client = new GoogleGenAI({ apiKey });
             const prompt = `Traduire le texte suivant de la langue "${sourceLang}" vers la langue "${targetLang}". Ne renvoie QUE la traduction, sans aucun commentaire : "${text}"`;
 
-            const response = await client.models.generateContent({
-                model: 'gemini-2.0-flash', // Use Flash 2.0 for speed and compatibility
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            });
+            const response = await callGemini('gemini-2.0-flash', [
+                { role: 'user', parts: [{ text: prompt }] }
+            ]);
 
             // Track tokens
             if (response.usageMetadata) {
@@ -504,21 +531,12 @@ export default function SpeechToTextApp() {
         if (!isAutoSavingRef.current) setAiResult('');
 
         try {
-            const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-            if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
-                throw new Error("Clé API manquante");
-            }
-
-            const client = new GoogleGenAI({ apiKey });
-
             const audioPart = await fileToGenerativePart(blobToUse);
-
             const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
 
-            const response = await client.models.generateContent({
-                model: 'gemini-2.0-flash', // Use Flash for speed with audio
-                contents: [{ role: 'user', parts: [{ text: prompt }, audioPart] }],
-            });
+            const response = await callGemini('gemini-2.0-flash', [
+                { role: 'user', parts: [{ text: prompt }, audioPart] }
+            ]);
 
             // Track tokens
             if (response.usageMetadata) {
@@ -579,16 +597,6 @@ export default function SpeechToTextApp() {
         setAiResult('');
 
         try {
-            const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-
-            if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
-                throw new Error("Clé API Gemini manquante. Veuillez configurer VITE_GEMINI_API_KEY dans le fichier .env");
-            }
-
-            const client = new GoogleGenAI({
-                apiKey: apiKey,
-            });
-
             const prompt = `
 Instructions de l'utilisateur : ${aiInstructions}
 
@@ -598,10 +606,9 @@ Texte à analyser :
 "${textToAnalyze}"
             `;
 
-            const response = await client.models.generateContent({
-                model: aiModel,
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            });
+            const response = await callGemini(aiModel, [
+                { role: 'user', parts: [{ text: prompt }] }
+            ]);
 
             // Track tokens
             if (response.usageMetadata) {

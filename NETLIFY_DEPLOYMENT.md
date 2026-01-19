@@ -129,46 +129,14 @@ Une fois configuré via l'interface web, Netlify déploiera automatiquement :
 > [!WARNING]
 > La clé API Gemini sera exposée côté client. Pour une meilleure sécurité :
 
-### Option : Utiliser Netlify Functions (Recommandé)
+### ✅ Solution implémentée : Proxy via Netlify Functions
 
-1. Créer un dossier `netlify/functions/`
-2. Créer `netlify/functions/gemini.js` :
+L'application est maintenant configurée pour utiliser automatiquement une fonction Netlify (`/.netlify/functions/gemini`) lorsqu'elle est déployée. Cela permet de :
+1. **Masquer votre clé API** du navigateur de l'utilisateur.
+2. **Éviter les limites de quota** côté client.
+3. **Sécuriser votre backend** Gemini.
 
-```javascript
-const { GoogleGenAI } = require('@google/genai');
-
-exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method Not Allowed' };
-  }
-
-  const { prompt, model } = JSON.parse(event.body);
-
-  const client = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY, // Sécurisé côté serveur
-  });
-
-  try {
-    const response = await client.models.generateContent({
-      model: model,
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    });
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ text: response.text }),
-    };
-  } catch (error) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: error.message }),
-    };
-  }
-};
-```
-
-3. Modifier `App.jsx` pour appeler cette function au lieu de l'API directement
-4. La clé API reste secrète côté serveur !
+Le fichier a été créé dans `netlify/functions/gemini.js` et utilise la variable `VITE_GEMINI_API_KEY` configurée dans votre interface Netlify.
 
 ---
 
