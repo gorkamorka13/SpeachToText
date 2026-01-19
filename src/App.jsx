@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-import { Mic, MicOff, Copy, Download, Trash2, Clock, Save, Languages, Speaker, FileAudio, FileText, Moon, Sun, Mail } from 'lucide-react';
+import { Mic, MicOff, Copy, Download, Trash2, Clock, Save, Languages, Speaker, FileAudio, FileText, Moon, Sun, Mail, StopCircle, RefreshCw, Settings, HelpCircle, FileBadge } from 'lucide-react';
 import { jsPDF } from "jspdf";
+import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } from 'docx';
+import { saveAs } from 'file-saver';
 
 import { GoogleGenAI } from "@google/genai";
 
@@ -53,6 +55,11 @@ export default function SpeechToTextApp() {
     const [hasDownloadedPDF, setHasDownloadedPDF] = useState(false);
     const [emailRecipient, setEmailRecipient] = useState('');
     const [emailSubject, setEmailSubject] = useState('Transcription Encounter');
+    const [tokenUsage, setTokenUsage] = useState({
+        lastPrompt: 0,
+        lastResponse: 0,
+        totalSession: 0
+    });
     const [errorLogs, setErrorLogs] = useState([]);
 
     // Audio Settings
@@ -202,6 +209,16 @@ export default function SpeechToTextApp() {
                 contents: [{ role: 'user', parts: [{ text: prompt }] }],
             });
 
+            // Track tokens
+            if (response.usageMetadata) {
+                const { promptTokenCount, candidatesTokenCount, totalTokenCount } = response.usageMetadata;
+                setTokenUsage(prev => ({
+                    lastPrompt: promptTokenCount,
+                    lastResponse: candidatesTokenCount,
+                    totalSession: prev.totalSession + totalTokenCount
+                }));
+            }
+
             const translated = extractTextFromResponse(response);
             return translated || `[Erreur de traduction]`;
         } catch (error) {
@@ -209,6 +226,102 @@ export default function SpeechToTextApp() {
             return `[Erreur: ${error.message}]`;
         }
     };
+
+    /**
+     * Trims leading and trailing silence from an audio blob.
+     */
+    const trimSilence = async (audioBlob) => {
+        try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+            const channelData = audioBuffer.getChannelData(0);
+            const sampleRate = audioBuffer.sampleRate;
+            const threshold = 0.01;
+
+            let start = 0;
+            while (start < channelData.length && Math.abs(channelData[start]) < threshold) {
+                start++;
+            }
+
+            let end = channelData.length - 1;
+            while (end > start && Math.abs(channelData[end]) < threshold) {
+                end--;
+            }
+
+            if (start >= end) return audioBlob; // No sound found or very short, return original
+
+            const duration = (end - start) / sampleRate;
+            const newBuffer = audioContext.createBuffer(
+                audioBuffer.numberOfChannels,
+                end - start,
+                sampleRate
+            );
+
+            for (let i = 0; i < audioBuffer.numberOfChannels; i++) {
+                newBuffer.copyToChannel(audioBuffer.getChannelData(i).subarray(start, end), i);
+            }
+
+            // Convert AudioBuffer to WAV Blob
+            return bufferToWav(newBuffer);
+        } catch (e) {
+            console.error("Trim Silence error:", e);
+            return audioBlob; // Fallback to original
+        }
+    };
+
+    // Helper to convert AudioBuffer to WAV
+    function bufferToWav(abuffer) {
+        let numOfChan = abuffer.numberOfChannels,
+            length = abuffer.length * numOfChan * 2 + 44,
+            buffer = new ArrayBuffer(length),
+            view = new DataView(buffer),
+            channels = [], i, sample,
+            offset = 0,
+            pos = 0;
+
+        // write WAVE header
+        setUint32(0x46464952);                         // "RIFF"
+        setUint32(length - 8);                         // file length - 8
+        setUint32(0x45564157);                         // "WAVE"
+        setUint32(0x20746d66);                         // "fmt " chunk
+        setUint32(16);                                  // length = 16
+        setUint16(1);                                   // PCM (uncompressed)
+        setUint16(numOfChan);
+        setUint32(abuffer.sampleRate);
+        setUint32(abuffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
+        setUint16(numOfChan * 2);                      // block-align
+        setUint16(16);                                  // 16-bit (hardcoded)
+        setUint32(0x61746164);                         // "data" - chunk
+        setUint32(length - pos - 4);                   // chunk length
+
+        // write interleaved data
+        for (i = 0; i < abuffer.numberOfChannels; i++)
+            channels.push(abuffer.getChannelData(i));
+
+        while (pos < length) {
+            for (i = 0; i < numOfChan; i++) {             // interleave channels
+                sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
+                sample = (sample < 0 ? sample * 0x8000 : sample * 0x7FFF) | 0; // scale to 16-bit signed int
+                view.setInt16(pos, sample, true);          // write 16-bit sample
+                pos += 2;
+            }
+            offset++
+        }
+
+        return new Blob([buffer], { type: "audio/wav" });
+
+        function setUint16(data) {
+            view.setUint16(pos, data, true);
+            pos += 2;
+        }
+
+        function setUint32(data) {
+            view.setUint32(pos, data, true);
+            pos += 4;
+        }
+    }
 
     const fileToGenerativePart = async (file) => {
         const base64EncodedDataPromise = new Promise((resolve) => {
@@ -329,6 +442,16 @@ export default function SpeechToTextApp() {
                 contents: [{ role: 'user', parts: [{ text: prompt }, audioPart] }],
             });
 
+            // Track tokens
+            if (response.usageMetadata) {
+                const { promptTokenCount, candidatesTokenCount, totalTokenCount } = response.usageMetadata;
+                setTokenUsage(prev => ({
+                    lastPrompt: promptTokenCount,
+                    lastResponse: candidatesTokenCount,
+                    totalSession: prev.totalSession + totalTokenCount
+                }));
+            }
+
             const text = extractTextFromResponse(response);
 
             if (text) {
@@ -401,6 +524,16 @@ Texte à analyser :
                 model: aiModel,
                 contents: [{ role: 'user', parts: [{ text: prompt }] }],
             });
+
+            // Track tokens
+            if (response.usageMetadata) {
+                const { promptTokenCount, candidatesTokenCount, totalTokenCount } = response.usageMetadata;
+                setTokenUsage(prev => ({
+                    lastPrompt: promptTokenCount,
+                    lastResponse: candidatesTokenCount,
+                    totalSession: prev.totalSession + totalTokenCount
+                }));
+            }
 
             const text = extractTextFromResponse(response);
 
@@ -832,10 +965,14 @@ Texte à analyser :
         e.preventDefault();
         setIsDragging(true);
     };
-
     const handleDragLeave = (e) => {
         e.preventDefault();
         setIsDragging(false);
+    };
+
+    const resetTokenUsage = () => {
+        setTokenUsage({ lastPrompt: 0, lastResponse: 0, totalSession: 0 });
+        showNotification("Compteur de tokens réinitialisé.");
     };
 
     const handleDrop = (e) => {
@@ -1035,6 +1172,87 @@ Texte à analyser :
         }
 
         return doc;
+    };
+
+    const downloadDOCX = async () => {
+        const currentTranscript = transcriptRef.current;
+        const currentAIResult = aiResultRef.current;
+        const currentTranslation = translatedTranscriptRef.current;
+
+        if (!currentTranscript && !currentAIResult) {
+            showNotification("Rien à exporter.");
+            return;
+        }
+
+        const sections = [];
+        const children = [];
+
+        // Title
+        children.push(new Paragraph({
+            text: "Rapport de Transcription Encounter",
+            heading: HeadingLevel.HEADING_1,
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 400 },
+        }));
+
+        // Date & Info
+        children.push(new Paragraph({
+            children: [
+                new TextRun({ text: `Date : ${new Date().toLocaleDateString('fr-FR')}`, bold: true }),
+                new TextRun({ break: 1, text: `Modèle utilisé : ${aiModel}` }),
+            ],
+            spacing: { after: 400 },
+        }));
+
+        if (currentAIResult) {
+            children.push(new Paragraph({ text: "Analyse de l'Agent IA", heading: HeadingLevel.HEADING_2, spacing: { before: 400, after: 200 } }));
+            children.push(new Paragraph({
+                children: [new TextRun(currentAIResult)],
+                alignment: pdfJustify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
+                spacing: { after: 400 },
+            }));
+        }
+
+        if (currentTranscript) {
+            children.push(new Paragraph({ text: "Transcription Originale", heading: HeadingLevel.HEADING_2, spacing: { before: 400, after: 200 } }));
+            children.push(new Paragraph({
+                children: [new TextRun(currentTranscript)],
+                alignment: pdfJustify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
+                spacing: { after: 400 },
+            }));
+        }
+
+        if (enableTranslation && currentTranslation) {
+            children.push(new Paragraph({ text: `Traduction (${targetLanguage})`, heading: HeadingLevel.HEADING_2, spacing: { before: 400, after: 200 } }));
+            children.push(new Paragraph({
+                children: [new TextRun(currentTranslation)],
+                alignment: pdfJustify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
+                spacing: { after: 400 },
+            }));
+        }
+
+        // Footer-like info
+        children.push(new Paragraph({
+            children: [new TextRun({ text: "Généré par SpeachToText - Encounter AI", italic: true, size: 18 })],
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 800 },
+        }));
+
+        const doc = new Document({
+            sections: [{
+                properties: {},
+                children: children,
+            }],
+        });
+
+        try {
+            const blob = await Packer.toBlob(doc);
+            saveAs(blob, `encounter-report-${new Date().toISOString().slice(0, 10)}.docx`);
+            showNotification("Fichier Word (.docx) généré !");
+        } catch (error) {
+            console.error("DOCX generation error:", error);
+            showNotification("Erreur lors de la génération Word.");
+        }
     };
 
     const downloadPDF = () => {
@@ -1515,6 +1733,28 @@ Texte à analyser :
                                 )}
                             </div>
                         )}
+
+                        {/* Token Counter UI */}
+                        <div className="mt-3 pt-3 border-t border-purple-50 sm:border-purple-100/50 dark:border-purple-900/20 flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-4 text-[10px] sm:text-xs font-medium uppercase tracking-wider">
+                                <div className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400/50"></span>
+                                    Dernier : <span className="text-purple-600 dark:text-purple-400 font-bold">{tokenUsage.lastPrompt + tokenUsage.lastResponse}</span> <span className="opacity-60">(P:{tokenUsage.lastPrompt} R:{tokenUsage.lastResponse})</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400/50"></span>
+                                    Session : <span className="text-blue-600 dark:text-blue-400 font-bold">{tokenUsage.totalSession}</span>
+                                </div>
+                            </div>
+                            <button
+                                onClick={resetTokenUsage}
+                                className="text-[10px] sm:text-xs text-gray-400 hover:text-red-400 transition-colors flex items-center gap-1"
+                                title="Réinitialiser le compteur de session"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-refresh-cw"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /></svg>
+                                Réinitialiser
+                            </button>
+                        </div>
                     </div>
 
                     <div className="flex flex-wrap gap-2 sm:gap-3">
@@ -1541,6 +1781,14 @@ Texte à analyser :
                         >
                             <Download className="w-4 h-4" />
                             PDF
+                        </button>
+                        <button
+                            onClick={downloadDOCX}
+                            disabled={!transcript && !aiResult}
+                            className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
+                        >
+                            <FileBadge className="w-4 h-4" />
+                            Word
                         </button>
                         <button
                             onClick={downloadAudio}
