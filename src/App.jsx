@@ -7,6 +7,85 @@ import { GoogleGenAI } from "@google/genai";
 import ArabicReshaper from 'arabic-reshaper';
 import { amiriFont } from './AmiriFont';
 
+const LanguageSelector = ({ label, value, onChange, languages, disabled, className, isDark }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const containerRef = useRef(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const selectedLang = languages.find(l => l.code === value) || languages[0];
+
+    return (
+        <div ref={containerRef} className={`relative flex-1 ${className}`}>
+            <button
+                type="button"
+                onClick={() => !disabled && setIsOpen(!isOpen)}
+                disabled={disabled}
+                className={`w-full flex items-center justify-between px-4 py-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-sm sm:text-base h-[46px] sm:h-[50px] transition-all shadow-sm ${isOpen ? 'ring-2 ring-purple-500 border-transparent' : ''}`}
+            >
+                <div className="flex items-center gap-2 overflow-hidden">
+                    <img
+                        src={`https://flagcdn.com/w40/${selectedLang.countryCode}.png`}
+                        alt={selectedLang.name}
+                        className="w-5 h-auto rounded-sm flex-shrink-0 shadow-sm"
+                    />
+                    <span className="truncate">{selectedLang.name.split(' ').slice(1).join(' ') || selectedLang.name}</span>
+                </div>
+                <svg
+                    className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+            </button>
+
+            {isOpen && (
+                <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
+                    <div className="p-1">
+                        {languages.map((lang) => (
+                            <button
+                                key={lang.code}
+                                type="button"
+                                onClick={() => {
+                                    onChange(lang.code);
+                                    setIsOpen(false);
+                                }}
+                                className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-md transition-colors ${value === lang.code
+                                    ? 'bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300'
+                                    : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50'
+                                    }`}
+                            >
+                                <img
+                                    src={`https://flagcdn.com/w40/${lang.countryCode}.png`}
+                                    alt={lang.name}
+                                    className="w-5 h-auto rounded-sm flex-shrink-0 shadow-sm"
+                                />
+                                <span className="flex-1 text-left">{lang.name.split(' ').slice(1).join(' ') || lang.name}</span>
+                                {value === lang.code && (
+                                    <svg className="w-4 h-4 text-purple-500" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                    </svg>
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 export default function SpeechToTextApp() {
     // -----------------------------------------------------------------
     // 1. ALL STATE DECLARATIONS
@@ -565,7 +644,11 @@ export default function SpeechToTextApp() {
             const text = extractTextFromResponse(response);
 
             if (text) {
-                setTranscript(prev => prev + (prev ? ' ' : '') + text);
+                if (isAutoSavingRef.current) {
+                    setTranscript(text);
+                } else {
+                    setTranscript(prev => prev + (prev ? ' ' : '') + text);
+                }
 
                 if (autoAnalyze) {
                     showNotification("Transcription audio terminée ! Analyse IA en cours...");
@@ -959,23 +1042,8 @@ Texte à analyser :
 
                 // Trigger Chain if AutoSaving
                 if (isAutoSavingRef.current) {
-                    if (transcriptionMode === 'post') {
-                        // Post Mode: We need to transcribe first
-                        // We can't call transcribeAudioWithGemini directly easily because it reads audioBlob state which might not be set yet due to closure.
-                        // But we can pass the blob explicitly or wait for state.
-                        // Actually, setAudioBlob(blob) triggers re-render, but we need immediate action.
-                        // Let's call a modified transcribe with the blob directly.
-                        transcribeAudioWithGemini(blob);
-                    } else {
-                        // Live Mode: Transcript is already in state (mostly).
-                        if (autoAnalyzeRef.current) {
-                            showNotification("Auto-Save: Analyse IA en cours...");
-                            processWithAI();
-                        } else {
-                            // Skip analysis, just save what we have
-                            finalizeAutoSave(null);
-                        }
-                    }
+                    // ALWAYS use high-accuracy transcription for auto-save
+                    transcribeAudioWithGemini(blob);
                 }
             };
 
@@ -1479,12 +1547,12 @@ Texte à analyser :
     };
 
     const languages = [
-        { code: 'fr-FR', name: '🇫🇷 Français' },
-        { code: 'en-US', name: '🇺🇸 English' },
-        { code: 'es-ES', name: '🇪🇸 Español' },
-        { code: 'de-DE', name: '🇩🇪 Deutsch' },
-        { code: 'it-IT', name: '🇮🇹 Italiano' },
-        { code: 'ar-SA', name: '🇸🇦 العربية' }
+        { code: 'fr-FR', name: '🇫🇷 Français', countryCode: 'fr' },
+        { code: 'en-US', name: '🇺🇸 English', countryCode: 'us' },
+        { code: 'es-ES', name: '🇪🇸 Español', countryCode: 'es' },
+        { code: 'de-DE', name: '🇩🇪 Deutsch', countryCode: 'de' },
+        { code: 'it-IT', name: '🇮🇹 Italiano', countryCode: 'it' },
+        { code: 'ar-SA', name: '🇸🇦 العربية', countryCode: 'sa' }
     ];
 
     if (!isSupported) {
@@ -1521,12 +1589,12 @@ Texte à analyser :
                                 <Mic className="w-6 h-6 sm:w-8 sm:h-8 text-purple-600 dark:text-purple-500" />
                                 <span className="truncate">Speech-to-Text</span>
                             </h1>
-                            <img
-                                src={darkMode ? "/Encounter_long_light.webp" : "/Encounter_long_dark.webp"}
-                                alt="Encounter Logo"
-                                className="h-6 sm:h-8 md:h-10"
-                            />
                         </div>
+                        <img
+                            src={darkMode ? "/Encounter_long_light.webp" : "/Encounter_long_dark.webp"}
+                            alt="Encounter Logo"
+                            className="absolute left-1/2 -translate-x-1/2 top-4 md:top-6 mt-[5px] h-6 sm:h-8 md:h-10 z-20 pointer-events-none"
+                        />
                         <div className="flex gap-2 self-end sm:self-auto">
                             <button
                                 onClick={() => setDarkMode(!darkMode)}
@@ -1548,54 +1616,45 @@ Texte à analyser :
                     <p className="text-gray-600 dark:text-gray-400 mb-6">Transcription et traduction en temps réel</p>
 
                     <div className="flex flex-col gap-4 mb-6">
-                        {/* Translation Toggle */}
-                        <div className="flex items-center gap-2 bg-white dark:bg-gray-700 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-600 shadow-sm self-start transition-colors">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <span className={`text-sm font-medium ${enableTranslation ? 'text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-gray-400'}`}>
-                                    Traduction
-                                </span>
-                                <div className="relative inline-flex items-center cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        className="sr-only peer"
-                                        checked={enableTranslation}
-                                        onChange={(e) => setEnableTranslation(e.target.checked)}
-                                    />
-                                    <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-300 dark:peer-focus:ring-purple-900 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-                                </div>
-                            </label>
-                        </div>
+                        <div className="flex flex-col sm:flex-row items-center gap-3">
+                            {/* Translation Toggle - Now integrated in the same row */}
+                            <div className="flex items-center gap-2 bg-white dark:bg-gray-700 px-3 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 shadow-sm transition-colors h-[46px] sm:h-[50px]">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <span className={`text-sm font-medium whitespace-nowrap ${enableTranslation ? 'text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                                        Traduction
+                                    </span>
+                                    <div className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={enableTranslation}
+                                            onChange={(e) => setEnableTranslation(e.target.checked)}
+                                        />
+                                        <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 dark:peer-focus:ring-purple-900 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                    </div>
+                                </label>
+                            </div>
 
-                        <div className="flex flex-col sm:flex-row gap-3">
-                            <select
+                            <LanguageSelector
                                 value={language}
-                                onChange={(e) => setLanguage(e.target.value)}
+                                onChange={setLanguage}
+                                languages={languages}
                                 disabled={isListening}
-                                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-sm sm:text-base"
-                            >
-                                <option value="" disabled>Langue source</option>
-                                {languages.map(lang => (
-                                    <option key={lang.code} value={lang.code}>{lang.name}</option>
-                                ))}
-                            </select>
+                            />
 
                             {enableTranslation && (
-                                <div className="hidden sm:flex items-center justify-center text-gray-400">
-                                    <Languages className="w-5 h-5" />
-                                </div>
-                            )}
+                                <>
+                                    <div className="hidden sm:flex items-center justify-center text-gray-400 px-1">
+                                        <Languages className="w-5 h-5" />
+                                    </div>
 
-                            {enableTranslation && (
-                                <select
-                                    value={targetLanguage}
-                                    onChange={(e) => setTargetLanguage(e.target.value)}
-                                    className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm sm:text-base"
-                                >
-                                    <option value="" disabled>Langue cible</option>
-                                    {languages.map(lang => (
-                                        <option key={`target-${lang.code}`} value={lang.code}>{lang.name}</option>
-                                    ))}
-                                </select>
+                                    <LanguageSelector
+                                        value={targetLanguage}
+                                        onChange={setTargetLanguage}
+                                        languages={languages}
+                                        className="flex-1"
+                                    />
+                                </>
                             )}
                         </div>
 
@@ -1816,7 +1875,7 @@ Texte à analyser :
                                 </div>
                             )}
                             <div className="flex justify-between items-center mb-2">
-                                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Original (Éditable)</h3>
+                                <div></div>
                                 {!isListening && transcript && (
                                     <button
                                         onClick={processWithAI}
@@ -2105,211 +2164,217 @@ Texte à analyser :
             </div>
 
             {/* AI Settings Modal */}
-            {showSettings && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-lg w-full transform transition-all border border-gray-100 dark:border-gray-700">
-                        <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings text-gray-600 dark:text-gray-400"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
-                            Configuration de l'Agent IA
-                        </h2>
+            {
+                showSettings && (
+                    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-lg w-full transform transition-all border border-gray-100 dark:border-gray-700">
+                            <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings text-gray-600 dark:text-gray-400"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
+                                Configuration de l'Agent IA
+                            </h2>
 
-                        {/* Model Configuration */}
-                        <div className="mb-4">
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                Modèle Gemini (ex: gemini-2.0-flash, gemini-2.5-flash, gemini-3-flash)
-                            </label>
-                            <input
-                                type="text"
-                                value={aiModel}
-                                onChange={(e) => setAiModel(e.target.value)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                                placeholder="gemini-2.0-flash"
-                            />
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                Modèles conseillés : gemini-2.0-flash (rapide), gemini-2.5-pro (puissant), gemini-3-flash (nouveau).
-                            </p>
-                        </div>
-                        <div className="mb-4">
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                Instructions pour l'analyse
-                            </label>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                                Décrivez ce que l'IA doit faire avec le texte (ex: résumer, extraire des tâches, corriger...)
-                            </p>
-                            <textarea
-                                value={aiInstructions}
-                                onChange={(e) => setAiInstructions(e.target.value)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent h-32 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                                placeholder="Entrez vos instructions ici..."
-                            />
-                        </div>
-
-                        {/* PDF Configuration */}
-                        <div className="mb-6 pt-4 border-t border-gray-100 dark:border-gray-700">
-                            <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
-                                <FileText className="w-4 h-4 text-purple-500" />
-                                Paramètres PDF
-                            </h3>
-                            <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/30 p-3 rounded-lg border border-gray-100 dark:border-gray-700">
-                                <div className="flex flex-col">
-                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Justifier le texte</span>
-                                    <span className="text-[10px] text-gray-500">Aligne le texte uniformément à gauche et à droite</span>
-                                </div>
-                                <label className="relative inline-flex items-center cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        className="sr-only peer"
-                                        checked={pdfJustify}
-                                        onChange={(e) => setPdfJustify(e.target.checked)}
-                                    />
-                                    <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 dark:peer-focus:ring-purple-900 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                            {/* Model Configuration */}
+                            <div className="mb-4">
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Modèle Gemini (ex: gemini-2.0-flash, gemini-2.5-flash, gemini-3-flash)
                                 </label>
-                            </div>
-                        </div>
-
-                        <div className="flex justify-end gap-2">
-                            <button
-                                onClick={() => setShowSettings(false)}
-                                className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                            >
-                                Annuler
-                            </button>
-                            <button
-                                onClick={() => setShowSettings(false)}
-                                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-                            >
-                                Enregistrer
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Success Modal */}
-            {showSuccessModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 max-w-sm w-full text-center border border-green-100 dark:border-green-900 transform scale-100 transition-all">
-                        <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-green-600 dark:text-green-400"><path d="M20 6 9 17l-5-5" /></svg>
-                        </div>
-                        <h2 className="text-2xl font-bold mb-2 text-gray-800 dark:text-white">Sauvegarde réussie !</h2>
-                        <p className="text-gray-600 dark:text-gray-300 mb-6">
-                            Tous les fichiers ont été générés et téléchargés avec succès.
-                        </p>
-                        <div className="space-y-2 text-sm text-gray-500 dark:text-gray-400 mb-6 bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg text-left">
-                            <div className="flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
-                                Transcription (PDF)
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
-                                Texte brut (.txt)
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
-                                Audio (.webm)
-                            </div>
-                        </div>
-                        <button
-                            onClick={() => setShowSuccessModal(false)}
-                            className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors shadow-lg hover:shadow-xl"
-                        >
-                            Fermer
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Email Transfer Modal - Assistant Workflow */}
-            {showEmailModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-md w-full border border-purple-100 dark:border-purple-900/30">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center">
-                                <Mail className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                            </div>
-                            <h2 className="text-xl font-bold text-gray-800 dark:text-white">Assistant de Transfert Email</h2>
-                        </div>
-
-                        <div className="space-y-6">
-                            {/* Step 1: Download */}
-                            <div className={`p-4 rounded-xl border-2 transition-all ${hasDownloadedPDF ? 'bg-green-50/50 border-green-200 dark:bg-green-900/10 dark:border-green-800/50' : 'bg-purple-50/50 border-purple-200 dark:bg-purple-900/10 dark:border-purple-800/50'}`}>
-                                <div className="flex items-center justify-between mb-3">
-                                    <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${hasDownloadedPDF ? 'bg-green-500 text-white' : 'bg-purple-600 text-white'}`}>1</span>
-                                        Télécharger le PDF
-                                    </h3>
-                                    {hasDownloadedPDF && (
-                                        <span className="text-xs font-bold text-green-600 dark:text-green-400 flex items-center gap-1">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                                            Prêt !
-                                        </span>
-                                    )}
-                                </div>
-                                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                                    Le fichier doit être sur votre appareil pour l'attacher à votre e-mail.
+                                <input
+                                    type="text"
+                                    value={aiModel}
+                                    onChange={(e) => setAiModel(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+                                    placeholder="gemini-2.0-flash"
+                                />
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                    Modèles conseillés : gemini-2.0-flash (rapide), gemini-2.5-pro (puissant), gemini-3-flash (nouveau).
                                 </p>
+                            </div>
+                            <div className="mb-4">
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Instructions pour l'analyse
+                                </label>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                                    Décrivez ce que l'IA doit faire avec le texte (ex: résumer, extraire des tâches, corriger...)
+                                </p>
+                                <textarea
+                                    value={aiInstructions}
+                                    onChange={(e) => setAiInstructions(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent h-32 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+                                    placeholder="Entrez vos instructions ici..."
+                                />
+                            </div>
+
+                            {/* PDF Configuration */}
+                            <div className="mb-6 pt-4 border-t border-gray-100 dark:border-gray-700">
+                                <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+                                    <FileText className="w-4 h-4 text-purple-500" />
+                                    Paramètres PDF
+                                </h3>
+                                <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/30 p-3 rounded-lg border border-gray-100 dark:border-gray-700">
+                                    <div className="flex flex-col">
+                                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Justifier le texte</span>
+                                        <span className="text-[10px] text-gray-500">Aligne le texte uniformément à gauche et à droite</span>
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={pdfJustify}
+                                            onChange={(e) => setPdfJustify(e.target.checked)}
+                                        />
+                                        <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 dark:peer-focus:ring-purple-900 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="flex justify-end gap-2">
                                 <button
-                                    onClick={() => { downloadPDF(); setHasDownloadedPDF(true); }}
-                                    className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all ${hasDownloadedPDF ? 'bg-white dark:bg-gray-800 text-green-600 border border-green-200 dark:border-green-800' : 'bg-purple-600 text-white hover:bg-purple-700 shadow-md'}`}
+                                    onClick={() => setShowSettings(false)}
+                                    className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                                 >
-                                    <FileText className="w-5 h-5" />
-                                    {hasDownloadedPDF ? 'Télécharger à nouveau' : 'Télécharger le PDF maintenant'}
+                                    Annuler
+                                </button>
+                                <button
+                                    onClick={() => setShowSettings(false)}
+                                    className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                                >
+                                    Enregistrer
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                )
+            }
 
-                            {/* Step 2: Prepare Email */}
-                            <div className={`p-4 rounded-xl border-2 transition-all ${hasDownloadedPDF ? 'bg-blue-50/50 border-blue-200 dark:bg-blue-900/10 dark:border-blue-800/50 opacity-100' : 'bg-gray-50 border-gray-100 dark:bg-gray-900/10 dark:border-gray-800/50 opacity-60'}`}>
-                                <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2 mb-4">
-                                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${hasDownloadedPDF ? 'bg-blue-600 text-white' : 'bg-gray-400 text-white'}`}>2</span>
-                                    Ouvrir votre Messagerie
-                                </h3>
-
-                                <div className="space-y-3">
-                                    <input
-                                        type="email"
-                                        value={emailRecipient}
-                                        onChange={(e) => setEmailRecipient(e.target.value)}
-                                        placeholder="Destinataire (optionnel)"
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                                    />
-                                    <input
-                                        type="text"
-                                        value={emailSubject}
-                                        onChange={(e) => setEmailSubject(e.target.value)}
-                                        placeholder="Objet de l'e-mail"
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                                    />
+            {/* Success Modal */}
+            {
+                showSuccessModal && (
+                    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
+                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 max-w-sm w-full text-center border border-green-100 dark:border-green-900 transform scale-100 transition-all">
+                            <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-green-600 dark:text-green-400"><path d="M20 6 9 17l-5-5" /></svg>
+                            </div>
+                            <h2 className="text-2xl font-bold mb-2 text-gray-800 dark:text-white">Sauvegarde réussie !</h2>
+                            <p className="text-gray-600 dark:text-gray-300 mb-6">
+                                Tous les fichiers ont été générés et téléchargés avec succès.
+                            </p>
+                            <div className="space-y-2 text-sm text-gray-500 dark:text-gray-400 mb-6 bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg text-left">
+                                <div className="flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
+                                    Transcription (PDF)
                                 </div>
-
-                                <div className="mt-4 p-3 bg-white/50 dark:bg-black/20 rounded-lg border border-blue-100 dark:border-blue-900/30">
-                                    <p className="text-[11px] text-blue-700 dark:text-blue-300 flex items-start gap-2 leading-tight">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
-                                        Une fois la messagerie ouverte, cliquez sur l'icône trombone (pièce jointe) et sélectionnez le PDF qui vient d'être téléchargé.
-                                    </p>
+                                <div className="flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
+                                    Texte brut (.txt)
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
+                                    Audio (.webm)
                                 </div>
                             </div>
-                        </div>
-
-                        <div className="flex justify-between items-center mt-8">
                             <button
-                                onClick={() => setShowEmailModal(false)}
-                                className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm"
+                                onClick={() => setShowSuccessModal(false)}
+                                className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors shadow-lg hover:shadow-xl"
                             >
                                 Fermer
                             </button>
-                            <button
-                                onClick={sendEmail}
-                                disabled={!hasDownloadedPDF}
-                                className={`px-6 py-2 rounded-lg transition-all font-bold flex items-center gap-2 ${hasDownloadedPDF ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg scale-105' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
-                            >
-                                <Mail className="w-5 h-5" />
-                                {hasDownloadedPDF ? 'Ouvrir Messagerie' : 'Télécharger PDF d\'abord'}
-                            </button>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
+
+            {/* Email Transfer Modal - Assistant Workflow */}
+            {
+                showEmailModal && (
+                    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
+                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-md w-full border border-purple-100 dark:border-purple-900/30">
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center">
+                                    <Mail className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                                </div>
+                                <h2 className="text-xl font-bold text-gray-800 dark:text-white">Assistant de Transfert Email</h2>
+                            </div>
+
+                            <div className="space-y-6">
+                                {/* Step 1: Download */}
+                                <div className={`p-4 rounded-xl border-2 transition-all ${hasDownloadedPDF ? 'bg-green-50/50 border-green-200 dark:bg-green-900/10 dark:border-green-800/50' : 'bg-purple-50/50 border-purple-200 dark:bg-purple-900/10 dark:border-purple-800/50'}`}>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${hasDownloadedPDF ? 'bg-green-500 text-white' : 'bg-purple-600 text-white'}`}>1</span>
+                                            Télécharger le PDF
+                                        </h3>
+                                        {hasDownloadedPDF && (
+                                            <span className="text-xs font-bold text-green-600 dark:text-green-400 flex items-center gap-1">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                                                Prêt !
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                                        Le fichier doit être sur votre appareil pour l'attacher à votre e-mail.
+                                    </p>
+                                    <button
+                                        onClick={() => { downloadPDF(); setHasDownloadedPDF(true); }}
+                                        className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all ${hasDownloadedPDF ? 'bg-white dark:bg-gray-800 text-green-600 border border-green-200 dark:border-green-800' : 'bg-purple-600 text-white hover:bg-purple-700 shadow-md'}`}
+                                    >
+                                        <FileText className="w-5 h-5" />
+                                        {hasDownloadedPDF ? 'Télécharger à nouveau' : 'Télécharger le PDF maintenant'}
+                                    </button>
+                                </div>
+
+                                {/* Step 2: Prepare Email */}
+                                <div className={`p-4 rounded-xl border-2 transition-all ${hasDownloadedPDF ? 'bg-blue-50/50 border-blue-200 dark:bg-blue-900/10 dark:border-blue-800/50 opacity-100' : 'bg-gray-50 border-gray-100 dark:bg-gray-900/10 dark:border-gray-800/50 opacity-60'}`}>
+                                    <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2 mb-4">
+                                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${hasDownloadedPDF ? 'bg-blue-600 text-white' : 'bg-gray-400 text-white'}`}>2</span>
+                                        Ouvrir votre Messagerie
+                                    </h3>
+
+                                    <div className="space-y-3">
+                                        <input
+                                            type="email"
+                                            value={emailRecipient}
+                                            onChange={(e) => setEmailRecipient(e.target.value)}
+                                            placeholder="Destinataire (optionnel)"
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                                        />
+                                        <input
+                                            type="text"
+                                            value={emailSubject}
+                                            onChange={(e) => setEmailSubject(e.target.value)}
+                                            placeholder="Objet de l'e-mail"
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                                        />
+                                    </div>
+
+                                    <div className="mt-4 p-3 bg-white/50 dark:bg-black/20 rounded-lg border border-blue-100 dark:border-blue-900/30">
+                                        <p className="text-[11px] text-blue-700 dark:text-blue-300 flex items-start gap-2 leading-tight">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
+                                            Une fois la messagerie ouverte, cliquez sur l'icône trombone (pièce jointe) et sélectionnez le PDF qui vient d'être téléchargé.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex justify-between items-center mt-8">
+                                <button
+                                    onClick={() => setShowEmailModal(false)}
+                                    className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm"
+                                >
+                                    Fermer
+                                </button>
+                                <button
+                                    onClick={sendEmail}
+                                    disabled={!hasDownloadedPDF}
+                                    className={`px-6 py-2 rounded-lg transition-all font-bold flex items-center gap-2 ${hasDownloadedPDF ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg scale-105' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+                                >
+                                    <Mail className="w-5 h-5" />
+                                    {hasDownloadedPDF ? 'Ouvrir Messagerie' : 'Télécharger PDF d\'abord'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
 
 
             {/* Copyright Footer */}
@@ -2318,6 +2383,6 @@ Texte à analyser :
                     Copyright Michel ESPARSA - {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'Version Inconnue'}
                 </p>
             </div>
-        </div>
+        </div >
     );
 }
