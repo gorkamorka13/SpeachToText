@@ -275,6 +275,20 @@ export default function SpeechToTextApp() {
         window.speechSynthesis.speak(utterance);
     };
 
+    const copyToClipboard = async (text) => {
+        if (!text) {
+            showNotification("Rien à copier.");
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(text);
+            showNotification("Copié dans le presse-papier !");
+        } catch (err) {
+            console.error('Failed to copy: ', err);
+            showNotification("Erreur lors de la copie.");
+        }
+    };
+
     const translateWithGemini = async (text, sourceLang, targetLang) => {
         if (!text) return '';
         try {
@@ -1082,10 +1096,6 @@ Texte à analyser :
         }
     };
 
-    const copyToClipboard = () => {
-        navigator.clipboard.writeText(transcript);
-        alert('Texte copié dans le presse-papier !');
-    };
 
     const downloadTranscript = () => {
         const textToSave = transcriptRef.current;
@@ -1495,7 +1505,16 @@ Texte à analyser :
     return (
         <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-50 dark:from-gray-900 dark:to-gray-800 transition-colors duration-500 p-4 md:p-8 text-gray-900 dark:text-gray-100">
             <div className="max-w-6xl mx-auto">
-                <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 md:p-8 mb-6 border border-gray-100 dark:border-gray-700 transition-colors duration-300">
+                <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 md:p-8 mb-6 border border-gray-100 dark:border-gray-700 transition-colors duration-300">
+                    {/* Notification Toast - Integrated near title */}
+                    {notification && (
+                        <div className="absolute top-4 left-6 z-50 animate-in fade-in slide-in-from-top-4 duration-300">
+                            <div className="bg-gray-800 dark:bg-gray-700 text-white px-4 py-2 rounded-lg shadow-xl flex items-center gap-2 border border-purple-500/30">
+                                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                                <span className="text-xs font-semibold tracking-wide uppercase">{notification}</span>
+                            </div>
+                        </div>
+                    )}
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                         <div className="flex items-center gap-12 w-full sm:w-auto">
                             <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800 dark:text-white flex items-center gap-2 sm:gap-3">
@@ -1811,17 +1830,27 @@ Texte à analyser :
                             </div>
                             <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 flex justify-between items-center">
                                 <span>Transcription Originale</span>
-                                <button
-                                    onClick={() => handleSpeak(transcript, 'transcript', language)}
-                                    className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'transcript'
-                                        ? 'bg-purple-600 text-white animate-pulse'
-                                        : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'
-                                        }`}
-                                    title={speakingSection === 'transcript' ? "Arrêter la lecture" : "Lire la transcription"}
-                                >
-                                    {speakingSection === 'transcript' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
-                                    <span className="text-[10px]">Lire</span>
-                                </button>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => copyToClipboard(transcript)}
+                                        className="p-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg shadow-sm hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
+                                        title="Copier la transcription"
+                                    >
+                                        <Copy className="w-5 h-5" />
+                                        <span className="text-[10px]">Copier</span>
+                                    </button>
+                                    <button
+                                        onClick={() => handleSpeak(transcript, 'transcript', language)}
+                                        className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'transcript'
+                                            ? 'bg-purple-600 text-white animate-pulse'
+                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'
+                                            }`}
+                                        title={speakingSection === 'transcript' ? "Arrêter la lecture" : "Lire la transcription"}
+                                    >
+                                        {speakingSection === 'transcript' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
+                                        <span className="text-[10px]">Lire</span>
+                                    </button>
+                                </div>
                                 {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
                             </h2>
                             <div className="flex-1 flex flex-col">
@@ -1850,17 +1879,27 @@ Texte à analyser :
                             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 h-64 overflow-y-auto border border-gray-100 dark:border-gray-700 relative">
                                 <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 text-purple-600 dark:text-purple-400 flex items-center justify-between">
                                     <span>Traduction instantanée ({targetLanguage})</span>
-                                    <button
-                                        onClick={() => handleSpeak(translatedTranscript, 'translation', targetLanguage)}
-                                        className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'translation'
-                                            ? 'bg-purple-600 text-white animate-pulse'
-                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'
-                                            }`}
-                                        title={speakingSection === 'translation' ? "Arrêter la lecture" : "Lire la traduction"}
-                                    >
-                                        {speakingSection === 'translation' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
-                                        <span className="text-[10px]">Lire</span>
-                                    </button>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => copyToClipboard(translatedTranscript)}
+                                            className="p-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg shadow-sm hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
+                                            title="Copier la traduction"
+                                        >
+                                            <Copy className="w-5 h-5" />
+                                            <span className="text-[10px]">Copier</span>
+                                        </button>
+                                        <button
+                                            onClick={() => handleSpeak(translatedTranscript, 'translation', targetLanguage)}
+                                            className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'translation'
+                                                ? 'bg-purple-600 text-white animate-pulse'
+                                                : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'
+                                                }`}
+                                            title={speakingSection === 'translation' ? "Arrêter la lecture" : "Lire la traduction"}
+                                        >
+                                            {speakingSection === 'translation' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
+                                            <span className="text-[10px]">Lire</span>
+                                        </button>
+                                    </div>
                                 </h2>
                                 <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-medium">
                                     {translatedTranscript || <span className="text-gray-400 italic">La traduction apparaîtra ici...</span>}
@@ -1875,14 +1914,24 @@ Texte à analyser :
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bot"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
                                 Résultat de l'Agent IA
                             </h3>
-                            <button
-                                onClick={() => handleSpeak(aiResult, 'ai', language)}
-                                className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'ai' ? 'bg-purple-600 text-white animate-pulse' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'}`}
-                                title={speakingSection === 'ai' ? "Arrêter la lecture" : "Lire le résultat"}
-                            >
-                                {speakingSection === 'ai' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
-                                <span className="text-[10px]">Lire</span>
-                            </button>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => copyToClipboard(aiResult)}
+                                    className="p-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg shadow-sm hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
+                                    title="Copier le résultat"
+                                >
+                                    <Copy className="w-5 h-5" />
+                                    <span className="text-[10px]">Copier</span>
+                                </button>
+                                <button
+                                    onClick={() => handleSpeak(aiResult, 'ai', language)}
+                                    className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'ai' ? 'bg-purple-600 text-white animate-pulse' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'}`}
+                                    title={speakingSection === 'ai' ? "Arrêter la lecture" : "Lire le résultat"}
+                                >
+                                    {speakingSection === 'ai' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
+                                    <span className="text-[10px]">Lire</span>
+                                </button>
+                            </div>
                         </div>
                         {isProcessingAI ? (
                             <div className="flex items-center gap-2 text-purple-400 italic">
@@ -1932,7 +1981,7 @@ Texte à analyser :
 
                     <div className="flex flex-wrap gap-2 sm:gap-3">
                         <button
-                            onClick={copyToClipboard}
+                            onClick={() => copyToClipboard(transcript)}
                             disabled={!transcript}
                             className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
                         >
@@ -2262,15 +2311,6 @@ Texte à analyser :
                 </div>
             )}
 
-            {/* Notification Toast */}
-            {notification && (
-                <div className="fixed bottom-6 right-6 z-50 animate-bounce">
-                    <div className="bg-gray-800 text-white px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span className="font-medium">{notification}</span>
-                    </div>
-                </div>
-            )}
 
             {/* Copyright Footer */}
             <div className="text-center mt-8 pb-4">
