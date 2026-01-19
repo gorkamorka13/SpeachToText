@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-
-import { Mic, MicOff, Copy, Download, Trash2, Clock, Save, Languages, Speaker, FileAudio, FileText, Moon, Sun, Mail, StopCircle, RefreshCw, Settings, HelpCircle, FileBadge } from 'lucide-react';
+import { Copy, Download, Save, Trash2, Mic, StopCircle, RefreshCw, FileAudio, Settings, HelpCircle, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun } from 'lucide-react';
 import { jsPDF } from "jspdf";
 import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } from 'docx';
 import { saveAs } from 'file-saver';
-
 import { GoogleGenAI } from "@google/genai";
+import ArabicReshaper from 'arabic-reshaper';
+import { amiriFont } from './AmiriFont';
 
 export default function SpeechToTextApp() {
     // -----------------------------------------------------------------
@@ -60,6 +60,7 @@ export default function SpeechToTextApp() {
         lastResponse: 0,
         totalSession: 0
     });
+    const [speakingSection, setSpeakingSection] = useState(null); // 'transcript', 'translation', 'ai'
     const [errorLogs, setErrorLogs] = useState([]);
 
     // Audio Settings
@@ -195,6 +196,53 @@ export default function SpeechToTextApp() {
     // 4. BUSINESS LOGIC
     // -----------------------------------------------------------------
     // Simulated Translation Map (Basic demonstration)
+    const handleSpeak = (text, section, langCode) => {
+        if (speakingSection === section) {
+            window.speechSynthesis.cancel();
+            setSpeakingSection(null);
+            return;
+        }
+
+        window.speechSynthesis.cancel();
+        if (!text) return;
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        const searchLang = langCode || 'fr-FR';
+        utterance.lang = searchLang;
+
+        // Advanced voice selection
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length > 0) {
+            // Priority 1: Exact match for the language code
+            let voice = voices.find(v => v.lang === searchLang);
+
+            // Priority 2: Match by language prefix (e.g., any Arabic 'ar' voice)
+            if (!voice) {
+                const prefix = searchLang.split('-')[0];
+                voice = voices.find(v => v.lang.startsWith(prefix));
+            }
+
+            if (voice) {
+                utterance.voice = voice;
+                console.log(`TTS: Using voice ${voice.name} for ${searchLang}`);
+            } else {
+                console.warn(`TTS: No specific voice found for ${searchLang}. Using default.`);
+                if (searchLang.startsWith('ar')) {
+                    showNotification("Voix arabe non installée sur votre PC. La lecture sera en langue par défaut.");
+                }
+            }
+        }
+
+        utterance.onend = () => setSpeakingSection(null);
+        utterance.onerror = () => {
+            console.error("TTS Error");
+            setSpeakingSection(null);
+        };
+
+        setSpeakingSection(section);
+        window.speechSynthesis.speak(utterance);
+    };
+
     const translateWithGemini = async (text, sourceLang, targetLang) => {
         if (!text) return '';
         try {
@@ -227,9 +275,39 @@ export default function SpeechToTextApp() {
         }
     };
 
+    const reshapeArabic = (text) => {
+        if (!text) return "";
+        const hasArabic = /[\u0600-\u06FF]/.test(text);
+        if (!hasArabic) return text;
+
+        try {
+            // Step 1: Reshape characters (handle connections/ligatures)
+            // Note: We don't reverse here anymore, we'll do it line-by-line in PDF export
+            // to ensure correct word order when wrapping and handles BiDi.
+            return ArabicReshaper.convertArabic(text);
+        } catch (e) {
+            console.error("Arabic Reshaping Error:", e);
+            return text;
+        }
+    };
+
     /**
-     * Trims leading and trailing silence from an audio blob.
+     * Helper to prepare text for RTL rendering.
+     * UPDATED: We now avoid full character reversal because modern PDF readers
+     * (Chrome, Acrobat) often handle RTL automatically if they see Arabic glyphs.
+     * Manual reversal can cause "double-reversal" (looking backwards in the viewer).
+     * We still keep reshaping to ensure characters connect correctly.
      */
+    const prepareRTLText = (text) => {
+        if (!text) return "";
+        // Step 1: Reshape (handle connections/ligatures)
+        const reshaped = ArabicReshaper.convertArabic(text);
+
+        // Step 2: Return as is (logical order).
+        // Modern PDF readers (Chrome/Acrobat) handle RTL automatically for Arabic glyphs.
+        // Copy-paste will also preserve the correct logical order.
+        return reshaped;
+    };
     const trimSilence = async (audioBlob) => {
         try {
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -1048,9 +1126,64 @@ Texte à analyser :
         const availableWidth = pageWidth - margin * 2;
         let yPosition = 20;
 
+        doc.addFileToVFS('Amiri-Regular.ttf', amiriFont);
+        doc.addFont('Amiri-Regular.ttf', 'Amiri', 'normal');
+
         doc.setFontSize(11);
         doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "normal");
+
+        // Helper for consistent text rendering with Arabic support
+        const writeParagraphs = (text, x, y, width, align = 'left') => {
+            const paragraphs = text.split('\n');
+            const innerLineHeight = 6;
+            let currentY = y;
+
+            for (let p = 0; p < paragraphs.length; p++) {
+                const paragraph = paragraphs[p];
+                if (!paragraph.trim()) {
+                    if (p < paragraphs.length - 1) currentY += innerLineHeight;
+                    continue;
+                }
+
+                const isArabic = /[\u0600-\u06FF]/.test(paragraph);
+                doc.setFont(isArabic ? "Amiri" : "helvetica", "normal");
+
+                // Reshape but don't reverse paragraph level (avoid wrapping issues)
+                const reshapedPara = isArabic ? ArabicReshaper.convertArabic(paragraph) : paragraph;
+                const lines = doc.splitTextToSize(reshapedPara, width);
+
+                for (let i = 0; i < lines.length; i++) {
+                    if (currentY > pageHeight - 20) {
+                        doc.addPage();
+                        currentY = 20;
+                        // On new page, we should stick to the current font
+                        doc.setFont(isArabic ? "Amiri" : "helvetica", "normal");
+                    }
+
+                    let line = lines[i];
+                    let currentAlign = align;
+                    let currentX = x;
+
+                    if (isArabic) {
+                        // Prepare lines for RTL while preserving logical order
+                        line = prepareRTLText(line);
+                        currentAlign = 'right';
+                        currentX = x + width;
+                    }
+
+                    const isLastLine = i === lines.length - 1;
+                    const options = (pdfJustify && !isLastLine && !isArabic)
+                        ? { align: 'justify', maxWidth: width }
+                        : { align: currentAlign };
+
+                    doc.text(line, currentX, currentY, options);
+                    currentY += innerLineHeight;
+                }
+                currentY += 2; // Extra spacer between paragraphs
+            }
+            return currentY;
+        };
 
         if (currentAIResult) {
             // ONLY AI Result Mode
@@ -1060,103 +1193,105 @@ Texte à analyser :
             yPosition += 10;
 
             doc.setFontSize(11);
-            doc.setFont("helvetica", "normal");
-            const paragraphs = currentAIResult.split('\n');
-            const lineHeight = 6;
-
-            for (let p = 0; p < paragraphs.length; p++) {
-                const paragraph = paragraphs[p];
-                if (!paragraph.trim() && p < paragraphs.length - 1) {
-                    yPosition += lineHeight;
-                    continue;
-                }
-                const splitAI = doc.splitTextToSize(paragraph, availableWidth);
-                for (let i = 0; i < splitAI.length; i++) {
-                    if (yPosition > pageHeight - 20) {
-                        doc.addPage();
-                        yPosition = 20;
-                    }
-                    const isLastLineOfParagraph = i === splitAI.length - 1;
-                    const options = (pdfJustify && !isLastLineOfParagraph)
-                        ? { align: 'justify', maxWidth: availableWidth }
-                        : {};
-                    doc.text(splitAI[i], margin, yPosition, options);
-                    yPosition += lineHeight;
-                }
-            }
+            yPosition = writeParagraphs(currentAIResult, margin, yPosition, availableWidth, 'left');
         } else {
             // Transcript Mode (Original + optional Translation)
             if (enableTranslation) {
-                const colWidth = (availableWidth / 2) - 5; // Gap of 10/2 = 5
+                const colGap = 10;
+                const colWidth = (availableWidth - colGap) / 2;
 
                 // Column Headers
                 doc.setFont("helvetica", "bold");
                 doc.text("Original", margin, yPosition);
-                doc.text(`Traduction (${targetLanguage})`, margin + colWidth + 10, yPosition);
+                doc.text(`Traduction (${targetLanguage})`, margin + colWidth + colGap, yPosition);
                 yPosition += 7;
                 doc.setFont("helvetica", "normal");
 
-                const splitOriginal = doc.splitTextToSize(currentTranscript, colWidth);
-                const splitTranslation = doc.splitTextToSize(currentTranslation, colWidth);
-
-                const maxLines = Math.max(splitOriginal.length, splitTranslation.length);
-                let currentLineIndex = 0;
+                // Process paragraphs to keep original and translation relatively aligned
+                const originalParagraphs = currentTranscript.split('\n');
+                const translatedParagraphs = currentTranslation.split('\n');
+                const maxPara = Math.max(originalParagraphs.length, translatedParagraphs.length);
                 const lineHeight = 5;
 
-                while (currentLineIndex < maxLines) {
-                    const linesRemaining = maxLines - currentLineIndex;
-                    const linesThatFit = Math.floor((pageHeight - 20 - yPosition) / lineHeight);
-                    const linesToRender = Math.min(linesRemaining, linesThatFit);
+                for (let i = 0; i < maxPara; i++) {
+                    const origPara = originalParagraphs[i] || "";
+                    const transPara = translatedParagraphs[i] || "";
 
-                    if (linesToRender <= 0) {
+                    const isArabicOrig = /[\u0600-\u06FF]/.test(origPara);
+                    const isArabicTrans = /[\u0600-\u06FF]/.test(transPara);
+
+                    const reshapedOrig = isArabicOrig ? ArabicReshaper.convertArabic(origPara) : origPara;
+                    const reshapedTrans = isArabicTrans ? ArabicReshaper.convertArabic(transPara) : transPara;
+
+                    // Split each column
+                    doc.setFont(isArabicOrig ? "Amiri" : "helvetica", "normal");
+                    const splitOrig = doc.splitTextToSize(reshapedOrig, colWidth);
+
+                    doc.setFont(isArabicTrans ? "Amiri" : "helvetica", "normal");
+                    const splitTrans = doc.splitTextToSize(reshapedTrans, colWidth);
+
+                    const paraLines = Math.max(splitOrig.length, splitTrans.length);
+
+                    // Check if we need a new page
+                    if (yPosition + (paraLines * lineHeight) > pageHeight - 20 && yPosition > 30) {
                         doc.addPage();
                         yPosition = 20;
-                        continue;
+                        doc.setFont("helvetica", "bold");
+                        doc.text("Original", margin, yPosition);
+                        doc.text(`Traduction (${targetLanguage})`, margin + colWidth + colGap, yPosition);
+                        yPosition += 7;
                     }
 
-                    const originalBlock = splitOriginal.slice(currentLineIndex, currentLineIndex + linesToRender);
-                    const translationBlock = splitTranslation.slice(currentLineIndex, currentLineIndex + linesToRender);
-
-                    if (originalBlock.length > 0) {
-                        doc.text(originalBlock, margin, yPosition, pdfJustify ? { align: 'justify', maxWidth: colWidth } : {});
-                    }
-                    if (translationBlock.length > 0) {
-                        doc.text(translationBlock, margin + colWidth + 10, yPosition, pdfJustify ? { align: 'justify', maxWidth: colWidth } : {});
-                    }
-
-                    yPosition += (linesToRender * lineHeight);
-                    currentLineIndex += linesToRender;
-
-                    if (currentLineIndex < maxLines) {
-                        doc.addPage();
-                        yPosition = 20;
-                    }
-                }
-            } else {
-                // Single Column
-                const paragraphs = currentTranscript.split('\n');
-                const lineHeight = 6;
-
-                for (let p = 0; p < paragraphs.length; p++) {
-                    const paragraph = paragraphs[p];
-                    if (!paragraph.trim() && p < paragraphs.length - 1) {
-                        yPosition += lineHeight;
-                        continue;
-                    }
-                    const splitText = doc.splitTextToSize(paragraph, availableWidth);
-                    for (let i = 0; i < splitText.length; i++) {
+                    // Render lines side-by-side
+                    for (let j = 0; j < paraLines; j++) {
                         if (yPosition > pageHeight - 20) {
                             doc.addPage();
                             yPosition = 20;
+                            doc.setFont("helvetica", "bold");
+                            doc.text("Original", margin, yPosition);
+                            doc.text(`Traduction (${targetLanguage})`, margin + colWidth + colGap, yPosition);
+                            yPosition += 7;
                         }
-                        const isLastLineOfParagraph = i === splitText.length - 1;
-                        const options = (pdfJustify && !isLastLineOfParagraph)
-                            ? { align: 'justify', maxWidth: availableWidth }
-                            : {};
-                        doc.text(splitText[i], margin, yPosition, options);
+
+                        // Original column
+                        if (j < splitOrig.length) {
+                            doc.setFont(isArabicOrig ? "Amiri" : "helvetica", "normal");
+                            let line = splitOrig[j];
+                            let xPos = margin;
+                            let align = 'left';
+                            if (isArabicOrig) {
+                                line = prepareRTLText(line);
+                                xPos = margin + colWidth;
+                                align = 'right';
+                            }
+                            const isLastLine = j === splitOrig.length - 1;
+                            const options = (pdfJustify && !isLastLine && !isArabicOrig) ? { align: 'justify', maxWidth: colWidth } : { align };
+                            doc.text(line, xPos, yPosition, options);
+                        }
+
+                        // Translation column
+                        if (j < splitTrans.length) {
+                            doc.setFont(isArabicTrans ? "Amiri" : "helvetica", "normal");
+                            let line = splitTrans[j];
+                            let xPos = margin + colWidth + colGap;
+                            let align = 'left';
+                            if (isArabicTrans) {
+                                line = prepareRTLText(line);
+                                xPos = margin + colWidth + colGap + colWidth;
+                                align = 'right';
+                            }
+                            const isLastLine = j === splitTrans.length - 1;
+                            const options = (pdfJustify && !isLastLine && !isArabicTrans) ? { align: 'justify', maxWidth: colWidth } : { align };
+                            doc.text(line, xPos, yPosition, options);
+                        }
+
                         yPosition += lineHeight;
                     }
+                    yPosition += 2; // Paragraph space
                 }
+            } else {
+                // Single Column
+                yPosition = writeParagraphs(currentTranscript, margin, yPosition, availableWidth, 'left');
             }
         }
 
@@ -1668,7 +1803,18 @@ Texte à analyser :
                                 )}
                             </div>
                             <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 flex justify-between items-center">
-                                <span>Transcription</span>
+                                <span>Transcription Originale</span>
+                                <button
+                                    onClick={() => handleSpeak(transcript, 'transcript', language)}
+                                    className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'transcript'
+                                        ? 'bg-purple-600 text-white animate-pulse'
+                                        : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'
+                                        }`}
+                                    title={speakingSection === 'transcript' ? "Arrêter la lecture" : "Lire la transcription"}
+                                >
+                                    {speakingSection === 'transcript' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
+                                    <span className="text-[10px]">Lire</span>
+                                </button>
                                 {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
                             </h2>
                             <div className="flex-1 flex flex-col">
@@ -1695,8 +1841,19 @@ Texte à analyser :
                         {/* Translation Pane (Conditional) */}
                         {enableTranslation && (
                             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 h-64 overflow-y-auto border border-gray-100 dark:border-gray-700 relative">
-                                <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 text-purple-600 dark:text-purple-400">
-                                    Traduction instantanée ({targetLanguage})
+                                <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 sticky top-0 bg-white dark:bg-gray-800 py-1 z-10 text-purple-600 dark:text-purple-400 flex items-center justify-between">
+                                    <span>Traduction instantanée ({targetLanguage})</span>
+                                    <button
+                                        onClick={() => handleSpeak(translatedTranscript, 'translation', targetLanguage)}
+                                        className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'translation'
+                                            ? 'bg-purple-600 text-white animate-pulse'
+                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'
+                                            }`}
+                                        title={speakingSection === 'translation' ? "Arrêter la lecture" : "Lire la traduction"}
+                                    >
+                                        {speakingSection === 'translation' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
+                                        <span className="text-[10px]">Lire</span>
+                                    </button>
                                 </h2>
                                 <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-medium">
                                     {translatedTranscript || <span className="text-gray-400 italic">La traduction apparaîtra ici...</span>}
@@ -1705,12 +1862,21 @@ Texte à analyser :
                         )}
                     </div>
 
-                    {/* AI Result Pane (Below Translation as requested) */}
                     <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-purple-100 dark:border-purple-900/30 mb-4 min-h-[150px] shadow-sm">
-                        <h3 className="text-xs font-semibold text-purple-500 dark:text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bot"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
-                            Résultat de l'Agent IA
-                        </h3>
+                        <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-xs font-semibold text-purple-500 dark:text-purple-400 uppercase tracking-wider flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bot"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
+                                Résultat de l'Agent IA
+                            </h3>
+                            <button
+                                onClick={() => handleSpeak(aiResult, 'ai', language)}
+                                className={`p-2 rounded-lg shadow-sm font-semibold transition-all flex items-center gap-1.5 ${speakingSection === 'ai' ? 'bg-purple-600 text-white animate-pulse' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-purple-500 hover:text-white'}`}
+                                title={speakingSection === 'ai' ? "Arrêter la lecture" : "Lire le résultat"}
+                            >
+                                {speakingSection === 'ai' ? <Square className="w-5 h-5 fill-current" /> : <Volume2 className="w-5 h-5" />}
+                                <span className="text-[10px]">Lire</span>
+                            </button>
+                        </div>
                         {isProcessingAI ? (
                             <div className="flex items-center gap-2 text-purple-400 italic">
                                 <div className="animate-spin h-4 w-4 border-2 border-purple-500 border-t-transparent rounded-full"></div>

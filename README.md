@@ -17,10 +17,12 @@ Une plateforme web de pointe pour la transcription, la traduction et l'analyse i
 - **Agent Personnalisable** : Modifiez les instructions de l'IA et le modèle utilisé (Gemini 2.0, 2.5, etc.) directement dans les paramètres.
 
 ### ⏱️ Automatisation & Sécurité
+- **Support Multilingue Complet** : Transcription et traduction supportant les scripts complexes, dont l'**Arabe** avec gestion intelligente du Right-to-Left (RTL).
 - **Arrêt Automatique sur Silence** : Détecte les pauses de 15 secondes et déclenche automatiquement l'arrêt de l'enregistrement.
 - **Flux de Sauvegarde Automatique** : En un seul clic (ou automatiquement), génère et télécharge :
-  - Un rapport **PDF "Encounter"** (mise en page pro).
+  - Un rapport **PDF "Encounter"** : Mise en page professionnelle avec support **BiDi** (plus d'inversion des mots latins dans les textes arabes).
   - Un fichier **Texte Brut (.txt)**.
+  - Un document **Word (.docx)** (Mise en page éditable).
   - L'enregistrement **Audio Haute Qualité (.webm)**.
 - **Historique Local** : Stockage sécurisé de vos sessions directement dans votre navigateur.
 
