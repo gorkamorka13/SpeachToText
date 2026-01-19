@@ -27,13 +27,13 @@ export default function SpeechToTextApp() {
     const [autoAnalyze, setAutoAnalyze] = useState(true); // Toggle for chaining
     const [aiInstructions, setAiInstructions] = useState(() => {
         return localStorage.getItem('aiInstructions') || `Corrige ce texte en:
-1)vérifiant l'orthographe,
-2)supprimant les espaces manquants entre les mots,
-3)supprimant les sauts de lignes inutiles,
-4)supprimant les retours à la ligne inutiles,
-5)supprimant les Carriage Return Line Feed et vérifie le texte
-6)identifiant des paragraphes dans ce texte et met le en forme
-et produit le fichier texte brut`;
+1) vérifiant l'orthographe,
+2) supprimant les espaces manquants entre les mots,
+3) supprimant les sauts de lignes inutiles,
+4) supprimant les retours à la ligne inutiles,
+5) supprimant les Carriage Return Line Feed et vérifie le texte
+6) identifiant des paragraphes dans ce texte.
+7) met le en forme et produit le fichier texte brut`;
     });
     const [aiModel, setAiModel] = useState(() => {
         return localStorage.getItem('aiModel') || 'gemini-2.0-flash';
@@ -58,6 +58,11 @@ et produit le fichier texte brut`;
     // Audio Settings
     const [enableSystemAudio, setEnableSystemAudio] = useState(() => {
         return localStorage.getItem('enableSystemAudio') === 'true'; // Default false
+    });
+
+    const [pdfJustify, setPdfJustify] = useState(() => {
+        const saved = localStorage.getItem('pdfJustify');
+        return saved !== null ? saved === 'true' : true; // Default true
     });
 
     const [isDragging, setIsDragging] = useState(false);
@@ -120,6 +125,14 @@ et produit le fichier texte brut`;
         localStorage.setItem('darkMode', darkMode);
     }, [darkMode]);
 
+    useEffect(() => {
+        localStorage.setItem('enableSystemAudio', enableSystemAudio);
+    }, [enableSystemAudio]);
+
+    useEffect(() => {
+        localStorage.setItem('pdfJustify', pdfJustify);
+    }, [pdfJustify]);
+
     const showNotification = (message) => {
         setNotification(message);
         setTimeout(() => setNotification(null), 3000); // Hide after 3 seconds
@@ -175,11 +188,26 @@ et produit le fichier texte brut`;
     // 4. BUSINESS LOGIC
     // -----------------------------------------------------------------
     // Simulated Translation Map (Basic demonstration)
-    const simulateTranslation = (text, targetLang) => {
-        // In a real app, this would call Google Translate / DeepL API
-        // For now, we simulate by appending a tag or simple reversal for demo
+    const translateWithGemini = async (text, sourceLang, targetLang) => {
         if (!text) return '';
-        return `[Traduction en ${targetLang}]: ${text}`;
+        try {
+            const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+            if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') return `[Erreur API]`;
+
+            const client = new GoogleGenAI({ apiKey });
+            const prompt = `Traduire le texte suivant de la langue "${sourceLang}" vers la langue "${targetLang}". Ne renvoie QUE la traduction, sans aucun commentaire : "${text}"`;
+
+            const response = await client.models.generateContent({
+                model: 'gemini-2.0-flash', // Use Flash 2.0 for speed and compatibility
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            });
+
+            const translated = extractTextFromResponse(response);
+            return translated || `[Erreur de traduction]`;
+        } catch (error) {
+            console.error("Translation Error:", error);
+            return `[Erreur: ${error.message}]`;
+        }
     };
 
     const fileToGenerativePart = async (file) => {
@@ -277,12 +305,12 @@ et produit le fichier texte brut`;
         const blobToUse = (directBlob instanceof Blob) ? directBlob : audioBlob;
 
         if (!blobToUse) {
-             logError("Aucun fichier audio à transcrire.");
-             return;
+            logError("Aucun fichier audio à transcrire.");
+            return;
         }
 
         setIsProcessingAI(true);
-        if(!isAutoSavingRef.current) setAiResult('');
+        if (!isAutoSavingRef.current) setAiResult('');
 
         try {
             const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -307,13 +335,13 @@ et produit le fichier texte brut`;
                 setTranscript(prev => prev + (prev ? ' ' : '') + text);
 
                 if (autoAnalyze) {
-                   showNotification("Transcription audio terminée ! Analyse IA en cours...");
-                   await processWithAI(text);
+                    showNotification("Transcription audio terminée ! Analyse IA en cours...");
+                    await processWithAI(text);
                 } else {
-                   showNotification("Transcription terminée !");
-                   if (isAutoSavingRef.current) {
+                    showNotification("Transcription terminée !");
+                    if (isAutoSavingRef.current) {
                         finalizeAutoSave(null);
-                   }
+                    }
                 }
             } else {
                 throw new Error("Réponse de transcription vide (structure inconnue).");
@@ -322,9 +350,9 @@ et produit le fichier texte brut`;
             console.error("Gemini Audio Error:", error);
             logError("Erreur Transcription Audio: " + error.message);
             showNotification("Erreur lors de la transcription audio Gemini: " + error.message);
-             if (isAutoSavingRef.current) {
-                 // Even if transcription fails, try to save audio/error logs
-                 finalizeAutoSave(null);
+            if (isAutoSavingRef.current) {
+                // Even if transcription fails, try to save audio/error logs
+                finalizeAutoSave(null);
             }
         } finally {
             if (!isAutoSavingRef.current) setIsProcessingAI(false); // If chaining, let processWithAI handle it
@@ -385,15 +413,15 @@ Texte à analyser :
 
             // Check if this was part of an Auto-Save chain
             if (isAutoSavingRef.current) {
-                 finalizeAutoSave(text);
+                finalizeAutoSave(text);
             }
 
         } catch (error) {
             logError(`Erreur AI: ${error.message || error}`);
             setAiResult(`Erreur lors de l'analyse IA : ${error.message || "Erreur inconnue"}`);
             // If failed, still try to save what we have
-             if (isAutoSavingRef.current) {
-                 finalizeAutoSave(null);
+            if (isAutoSavingRef.current) {
+                finalizeAutoSave(null);
             }
         } finally {
             setIsProcessingAI(false);
@@ -449,7 +477,7 @@ Texte à analyser :
                 // Throttle interim updates to ~200ms (5fps) to prevent layout thrashing
                 const now = Date.now();
                 if (now - lastInterimUpdateRef.current > 200) {
-                   setInterimTranscript(currentInterimTranscript);
+                    setInterimTranscript(currentInterimTranscript);
                     lastInterimUpdateRef.current = now;
                 }
             }
@@ -556,11 +584,17 @@ Texte à analyser :
             setTranslatedTranscript('');
             return;
         }
-        const fullText = debouncedTranscript + debouncedInterimTranscript;
+        const fullText = (debouncedTranscript + debouncedInterimTranscript).trim();
         if (fullText) {
-            setTranslatedTranscript(simulateTranslation(fullText, targetLanguage));
+            const runTranslation = async () => {
+                const result = await translateWithGemini(fullText, language, targetLanguage);
+                setTranslatedTranscript(result);
+            };
+            runTranslation();
+        } else {
+            setTranslatedTranscript('');
         }
-    }, [debouncedTranscript, debouncedInterimTranscript, targetLanguage, enableTranslation]);
+    }, [debouncedTranscript, debouncedInterimTranscript, targetLanguage, language, enableTranslation]);
 
 
 
@@ -626,8 +660,8 @@ Texte à analyser :
             // 1. Start Speech Recognition ONLY if in 'live' mode
             if (transcriptionMode === 'live') {
                 try {
-                     recognitionRef.current.start();
-                } catch(e) { /* ignore already started */ }
+                    recognitionRef.current.start();
+                } catch (e) { /* ignore already started */ }
             }
 
             setIsListening(true);
@@ -694,20 +728,20 @@ Texte à analyser :
                 // Trigger Chain if AutoSaving
                 if (isAutoSavingRef.current) {
                     if (transcriptionMode === 'post') {
-                         // Post Mode: We need to transcribe first
-                         // We can't call transcribeAudioWithGemini directly easily because it reads audioBlob state which might not be set yet due to closure.
-                         // But we can pass the blob explicitly or wait for state.
-                         // Actually, setAudioBlob(blob) triggers re-render, but we need immediate action.
-                         // Let's call a modified transcribe with the blob directly.
-                         transcribeAudioWithGemini(blob);
+                        // Post Mode: We need to transcribe first
+                        // We can't call transcribeAudioWithGemini directly easily because it reads audioBlob state which might not be set yet due to closure.
+                        // But we can pass the blob explicitly or wait for state.
+                        // Actually, setAudioBlob(blob) triggers re-render, but we need immediate action.
+                        // Let's call a modified transcribe with the blob directly.
+                        transcribeAudioWithGemini(blob);
                     } else {
                         // Live Mode: Transcript is already in state (mostly).
                         if (autoAnalyzeRef.current) {
                             showNotification("Auto-Save: Analyse IA en cours...");
                             processWithAI();
                         } else {
-                             // Skip analysis, just save what we have
-                             finalizeAutoSave(null);
+                            // Skip analysis, just save what we have
+                            finalizeAutoSave(null);
                         }
                     }
                 }
@@ -736,7 +770,7 @@ Texte à analyser :
             setTimeout(() => {
                 const finalTranscript = transcriptRef.current;
                 if (finalTranscript && finalTranscript.trim()) {
-                     processWithAI(finalTranscript);
+                    processWithAI(finalTranscript);
                 } else {
                     showNotification("Pas de texte à analyser.");
                 }
@@ -745,18 +779,18 @@ Texte à analyser :
 
         // Stop recognition if it was running (live mode) or force stop just in case
         if (recognitionRef.current) {
-             try {
+            try {
                 recognitionRef.current.stop();
-            } catch(e) { /* ignore if not running */ }
+            } catch (e) { /* ignore if not running */ }
         }
 
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop(); // This triggers onstop -> handles autoSave logic
         } else {
-             // If media recorder failed or wasn't running but we need to stop?
-             // Should not happen if isListening was true.
-             setIsListening(false);
-             isListeningRef.current = false;
+            // If media recorder failed or wasn't running but we need to stop?
+            // Should not happen if isListening was true.
+            setIsListening(false);
+            isListeningRef.current = false;
         }
 
         stopMediaTracks();
@@ -779,10 +813,10 @@ Texte à analyser :
         if (!file) return;
 
         const isAudio = file.type.startsWith('audio/') ||
-                        file.type === 'video/webm' ||
-                        file.name.toLowerCase().endsWith('.webm') ||
-                        file.name.toLowerCase().endsWith('.mp3') ||
-                        file.name.toLowerCase().endsWith('.wav');
+            file.type === 'video/webm' ||
+            file.name.toLowerCase().endsWith('.webm') ||
+            file.name.toLowerCase().endsWith('.mp3') ||
+            file.name.toLowerCase().endsWith('.wav');
 
         if (isAudio) {
             clearTranscript();
@@ -811,10 +845,10 @@ Texte à analyser :
         if (!file) return;
 
         const isAudio = file.type.startsWith('audio/') ||
-                        file.type === 'video/webm' ||
-                        file.name.toLowerCase().endsWith('.webm') ||
-                        file.name.toLowerCase().endsWith('.mp3') ||
-                        file.name.toLowerCase().endsWith('.wav');
+            file.type === 'video/webm' ||
+            file.name.toLowerCase().endsWith('.webm') ||
+            file.name.toLowerCase().endsWith('.mp3') ||
+            file.name.toLowerCase().endsWith('.wav');
 
         if (isAudio) {
             clearTranscript();
@@ -877,7 +911,7 @@ Texte à analyser :
         const availableWidth = pageWidth - margin * 2;
         let yPosition = 20;
 
-        doc.setFontSize(10);
+        doc.setFontSize(11);
         doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "normal");
 
@@ -890,47 +924,114 @@ Texte à analyser :
 
             doc.setFontSize(11);
             doc.setFont("helvetica", "normal");
-            const splitAI = doc.splitTextToSize(currentAIResult, availableWidth);
+            const paragraphs = currentAIResult.split('\n');
+            const lineHeight = 6;
 
-            for(let i=0; i<splitAI.length; i++) {
-                if (yPosition > pageHeight - 20) {
-                    doc.addPage();
-                    yPosition = 20;
+            for (let p = 0; p < paragraphs.length; p++) {
+                const paragraph = paragraphs[p];
+                if (!paragraph.trim() && p < paragraphs.length - 1) {
+                    yPosition += lineHeight;
+                    continue;
                 }
-                doc.text(splitAI[i], margin, yPosition);
-                yPosition += 6; // Line height for AI text
+                const splitAI = doc.splitTextToSize(paragraph, availableWidth);
+                for (let i = 0; i < splitAI.length; i++) {
+                    if (yPosition > pageHeight - 20) {
+                        doc.addPage();
+                        yPosition = 20;
+                    }
+                    const isLastLineOfParagraph = i === splitAI.length - 1;
+                    const options = (pdfJustify && !isLastLineOfParagraph)
+                        ? { align: 'justify', maxWidth: availableWidth }
+                        : {};
+                    doc.text(splitAI[i], margin, yPosition, options);
+                    yPosition += lineHeight;
+                }
             }
         } else {
             // Transcript Mode (Original + optional Translation)
             if (enableTranslation) {
-                 const colWidth = (availableWidth / 2) - 5; // Gap of 10/2 = 5
+                const colWidth = (availableWidth / 2) - 5; // Gap of 10/2 = 5
 
-                 // Column Headers
-                 doc.setFont("helvetica", "bold");
-                 doc.text("Original", margin, yPosition);
-                 doc.text(`Traduction (${targetLanguage})`, margin + colWidth + 10, yPosition);
-                 yPosition += 7;
-                 doc.setFont("helvetica", "normal");
+                // Column Headers
+                doc.setFont("helvetica", "bold");
+                doc.text("Original", margin, yPosition);
+                doc.text(`Traduction (${targetLanguage})`, margin + colWidth + 10, yPosition);
+                yPosition += 7;
+                doc.setFont("helvetica", "normal");
 
-                 const splitOriginal = doc.splitTextToSize(currentTranscript, colWidth);
-                 const splitTranslation = doc.splitTextToSize(currentTranslation, colWidth);
+                const splitOriginal = doc.splitTextToSize(currentTranscript, colWidth);
+                const splitTranslation = doc.splitTextToSize(currentTranslation, colWidth);
 
-                 const maxLines = Math.max(splitOriginal.length, splitTranslation.length);
+                const maxLines = Math.max(splitOriginal.length, splitTranslation.length);
+                let currentLineIndex = 0;
+                const lineHeight = 5;
 
-                 for(let i=0; i<maxLines; i++) {
-                     if (yPosition > pageHeight - 20) {
-                         doc.addPage();
-                         yPosition = 20;
-                     }
-                     if(splitOriginal[i]) doc.text(splitOriginal[i], margin, yPosition);
-                     if(splitTranslation[i]) doc.text(splitTranslation[i], margin + colWidth + 10, yPosition);
-                     yPosition += 5; // Line height
-                 }
+                while (currentLineIndex < maxLines) {
+                    const linesRemaining = maxLines - currentLineIndex;
+                    const linesThatFit = Math.floor((pageHeight - 20 - yPosition) / lineHeight);
+                    const linesToRender = Math.min(linesRemaining, linesThatFit);
+
+                    if (linesToRender <= 0) {
+                        doc.addPage();
+                        yPosition = 20;
+                        continue;
+                    }
+
+                    const originalBlock = splitOriginal.slice(currentLineIndex, currentLineIndex + linesToRender);
+                    const translationBlock = splitTranslation.slice(currentLineIndex, currentLineIndex + linesToRender);
+
+                    if (originalBlock.length > 0) {
+                        doc.text(originalBlock, margin, yPosition, pdfJustify ? { align: 'justify', maxWidth: colWidth } : {});
+                    }
+                    if (translationBlock.length > 0) {
+                        doc.text(translationBlock, margin + colWidth + 10, yPosition, pdfJustify ? { align: 'justify', maxWidth: colWidth } : {});
+                    }
+
+                    yPosition += (linesToRender * lineHeight);
+                    currentLineIndex += linesToRender;
+
+                    if (currentLineIndex < maxLines) {
+                        doc.addPage();
+                        yPosition = 20;
+                    }
+                }
             } else {
                 // Single Column
-                const splitText = doc.splitTextToSize(currentTranscript, availableWidth);
-                doc.text(splitText, margin, yPosition);
+                const paragraphs = currentTranscript.split('\n');
+                const lineHeight = 6;
+
+                for (let p = 0; p < paragraphs.length; p++) {
+                    const paragraph = paragraphs[p];
+                    if (!paragraph.trim() && p < paragraphs.length - 1) {
+                        yPosition += lineHeight;
+                        continue;
+                    }
+                    const splitText = doc.splitTextToSize(paragraph, availableWidth);
+                    for (let i = 0; i < splitText.length; i++) {
+                        if (yPosition > pageHeight - 20) {
+                            doc.addPage();
+                            yPosition = 20;
+                        }
+                        const isLastLineOfParagraph = i === splitText.length - 1;
+                        const options = (pdfJustify && !isLastLineOfParagraph)
+                            ? { align: 'justify', maxWidth: availableWidth }
+                            : {};
+                        doc.text(splitText[i], margin, yPosition, options);
+                        yPosition += lineHeight;
+                    }
+                }
             }
+        }
+
+        // Pagination & Date
+        const totalPages = doc.internal.getNumberOfPages();
+        const currentDate = new Date().toLocaleDateString('fr-FR');
+        for (let i = 1; i <= totalPages; i++) {
+            doc.setPage(i);
+            doc.setFontSize(10);
+            doc.setTextColor(150);
+            const footerText = `Page ${i} / ${totalPages} - ${currentDate}`;
+            doc.text(footerText, pageWidth / 2, pageHeight - 10, { align: 'center' });
         }
 
         return doc;
@@ -1048,7 +1149,7 @@ Texte à analyser :
                             />
                         </div>
                         <div className="flex gap-2 self-end sm:self-auto">
-                           <button
+                            <button
                                 onClick={() => setDarkMode(!darkMode)}
                                 className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
                                 title={darkMode ? "Mode Clair" : "Mode Sombre"}
@@ -1060,7 +1161,7 @@ Texte à analyser :
                                 className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
                                 title="Paramètres de l'Agent IA"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
                             </button>
                         </div>
                     </div>
@@ -1099,7 +1200,7 @@ Texte à analyser :
                                 ))}
                             </select>
 
-{enableTranslation && (
+                            {enableTranslation && (
                                 <div className="hidden sm:flex items-center justify-center text-gray-400">
                                     <Languages className="w-5 h-5" />
                                 </div>
@@ -1120,13 +1221,12 @@ Texte à analyser :
                         </div>
 
                         <div className="flex flex-col sm:flex-row gap-3 items-center justify-between w-full">
-                             {/* Drag & Drop Zone */}
-                             <div
-                                className={`flex-1 w-full p-4 border-2 border-dashed rounded-xl transition-all flex flex-col items-center justify-center gap-2 cursor-pointer ${
-                                    isDragging
+                            {/* Drag & Drop Zone */}
+                            <div
+                                className={`flex-1 w-full p-4 border-2 border-dashed rounded-xl transition-all flex flex-col items-center justify-center gap-2 cursor-pointer ${isDragging
                                     ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
                                     : 'border-gray-200 dark:border-gray-700 hover:border-purple-300 dark:hover:border-purple-700 bg-gray-50/50 dark:bg-gray-800/50'
-                                }`}
+                                    }`}
                                 onDragOver={handleDragOver}
                                 onDragLeave={handleDragLeave}
                                 onDrop={handleDrop}
@@ -1159,29 +1259,27 @@ Texte à analyser :
                                         <p className="text-[10px] text-gray-400 uppercase tracking-widest">MP3, WAV, WebM supportés</p>
                                     </>
                                 )}
-                             </div>
+                            </div>
 
-                             {/* Mode Toggle */}
-                             <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg self-start sm:self-auto">
+                            {/* Mode Toggle */}
+                            <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg self-start sm:self-auto">
                                 <button
                                     onClick={() => !isListening && setTranscriptionMode('live')}
                                     disabled={isListening}
-                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
-                                        transcriptionMode === 'live'
-                                            ? 'bg-white dark:bg-gray-600 text-purple-600 dark:text-purple-300 shadow-sm'
-                                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${transcriptionMode === 'live'
+                                        ? 'bg-white dark:bg-gray-600 text-purple-600 dark:text-purple-300 shadow-sm'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
                                 >
                                     Live (Rapide)
                                 </button>
                                 <button
                                     onClick={() => !isListening && setTranscriptionMode('post')}
                                     disabled={isListening}
-                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
-                                        transcriptionMode === 'post'
-                                            ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-300 shadow-sm'
-                                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${transcriptionMode === 'post'
+                                        ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-300 shadow-sm'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
                                 >
                                     Post (Précis)
                                 </button>
@@ -1201,7 +1299,7 @@ Texte à analyser :
                             </button>
 
                             {/* Auto Stop Silence Toggle */}
-                             <button
+                            <button
                                 onClick={() => setAutoStopSilence(!autoStopSilence)}
                                 disabled={isListening}
                                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 border ${autoStopSilence
@@ -1257,15 +1355,14 @@ Texte à analyser :
                                     {[...Array(20)].map((_, i) => (
                                         <div
                                             key={i}
-                                            className={`h-full flex-1 rounded-sm transition-all duration-75 ${
-                                                (volumeLevel / 128) > (i / 20)
-                                                    ? i > 15
-                                                        ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'
-                                                        : i > 10
-                                                            ? 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.5)]'
-                                                            : 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]'
-                                                    : 'bg-gray-300 dark:bg-gray-900 border-none shadow-none'
-                                            }`}
+                                            className={`h-full flex-1 rounded-sm transition-all duration-75 ${(volumeLevel / 128) > (i / 20)
+                                                ? i > 15
+                                                    ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'
+                                                    : i > 10
+                                                        ? 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.5)]'
+                                                        : 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]'
+                                                : 'bg-gray-300 dark:bg-gray-900 border-none shadow-none'
+                                                }`}
                                         ></div>
                                     ))}
                                 </div>
@@ -1299,7 +1396,7 @@ Texte à analyser :
                                     </>
                                 ) : (
                                     <>
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-zap"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-zap"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
                                         Transcrire maintenant
                                     </>
                                 )}
@@ -1310,7 +1407,7 @@ Texte à analyser :
                     {/* Auto-Analyze Toggle for Post Mode */}
                     {transcriptionMode === 'post' && (
                         <div className="mb-4 flex items-center gap-2">
-                             <input
+                            <input
                                 type="checkbox"
                                 id="autoAnalyze"
                                 checked={autoAnalyze}
@@ -1323,7 +1420,7 @@ Texte à analyser :
                         </div>
                     )}
 
-<div className={`grid grid-cols-1 ${enableTranslation ? 'md:grid-cols-2' : ''} gap-4 mb-4`}>
+                    <div className={`grid grid-cols-1 ${enableTranslation ? 'md:grid-cols-2' : ''} gap-4 mb-4`}>
                         {/* Source Text Pane */}
                         <div
                             ref={transcriptContainerRef}
@@ -1347,7 +1444,7 @@ Texte à analyser :
                                         disabled={isProcessingAI}
                                         className="text-xs bg-purple-100 dark:bg-purple-500 text-purple-700 dark:text-white px-2 py-1 rounded hover:bg-purple-200 dark:hover:bg-purple-600 font-medium transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-sparkles"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-sparkles"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></svg>
                                         {isProcessingAI ? 'Analyse...' : 'Analyser avec IA'}
                                     </button>
                                 )}
@@ -1393,7 +1490,7 @@ Texte à analyser :
                     {/* AI Result Pane (Below Translation as requested) */}
                     <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-purple-100 dark:border-purple-900/30 mb-4 min-h-[150px] shadow-sm">
                         <h3 className="text-xs font-semibold text-purple-500 dark:text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bot"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bot"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
                             Résultat de l'Agent IA
                         </h3>
                         {isProcessingAI ? (
@@ -1477,12 +1574,12 @@ Texte à analyser :
                             <Trash2 className="w-4 h-4" />
                             Effacer
                         </button>
-                         {errorLogs.length > 0 && (
+                        {errorLogs.length > 0 && (
                             <button
                                 onClick={downloadErrorLog}
                                 className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm sm:text-base"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-triangle"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-triangle"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><path d="M12 9v4" /><path d="M12 17h.01" /></svg>
                                 Logs d'erreur ({errorLogs.length})
                             </button>
                         )}
@@ -1542,7 +1639,7 @@ Texte à analyser :
                 <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
                     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-lg w-full transform transition-all border border-gray-100 dark:border-gray-700">
                         <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings text-gray-600 dark:text-gray-400"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings text-gray-600 dark:text-gray-400"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
                             Configuration de l'Agent IA
                         </h2>
 
@@ -1576,6 +1673,30 @@ Texte à analyser :
                                 placeholder="Entrez vos instructions ici..."
                             />
                         </div>
+
+                        {/* PDF Configuration */}
+                        <div className="mb-6 pt-4 border-t border-gray-100 dark:border-gray-700">
+                            <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+                                <FileText className="w-4 h-4 text-purple-500" />
+                                Paramètres PDF
+                            </h3>
+                            <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/30 p-3 rounded-lg border border-gray-100 dark:border-gray-700">
+                                <div className="flex flex-col">
+                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Justifier le texte</span>
+                                    <span className="text-[10px] text-gray-500">Aligne le texte uniformément à gauche et à droite</span>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        className="sr-only peer"
+                                        checked={pdfJustify}
+                                        onChange={(e) => setPdfJustify(e.target.checked)}
+                                    />
+                                    <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 dark:peer-focus:ring-purple-900 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                </label>
+                            </div>
+                        </div>
+
                         <div className="flex justify-end gap-2">
                             <button
                                 onClick={() => setShowSettings(false)}
@@ -1599,7 +1720,7 @@ Texte à analyser :
                 <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
                     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 max-w-sm w-full text-center border border-green-100 dark:border-green-900 transform scale-100 transition-all">
                         <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-green-600 dark:text-green-400"><path d="M20 6 9 17l-5-5"/></svg>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-green-600 dark:text-green-400"><path d="M20 6 9 17l-5-5" /></svg>
                         </div>
                         <h2 className="text-2xl font-bold mb-2 text-gray-800 dark:text-white">Sauvegarde réussie !</h2>
                         <p className="text-gray-600 dark:text-gray-300 mb-6">
@@ -1607,15 +1728,15 @@ Texte à analyser :
                         </p>
                         <div className="space-y-2 text-sm text-gray-500 dark:text-gray-400 mb-6 bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg text-left">
                             <div className="flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5"/></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
                                 Transcription (PDF)
                             </div>
                             <div className="flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5"/></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
                                 Texte brut (.txt)
                             </div>
                             <div className="flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5"/></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
                                 Audio (.webm)
                             </div>
                         </div>
@@ -1650,7 +1771,7 @@ Texte à analyser :
                                     </h3>
                                     {hasDownloadedPDF && (
                                         <span className="text-xs font-bold text-green-600 dark:text-green-400 flex items-center gap-1">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
                                             Prêt !
                                         </span>
                                     )}
@@ -1693,7 +1814,7 @@ Texte à analyser :
 
                                 <div className="mt-4 p-3 bg-white/50 dark:bg-black/20 rounded-lg border border-blue-100 dark:border-blue-900/30">
                                     <p className="text-[11px] text-blue-700 dark:text-blue-300 flex items-start gap-2 leading-tight">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
                                         Une fois la messagerie ouverte, cliquez sur l'icône trombone (pièce jointe) et sélectionnez le PDF qui vient d'être téléchargé.
                                     </p>
                                 </div>
