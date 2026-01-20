@@ -35,6 +35,7 @@ Une plateforme web de pointe pour la transcription, la traduction et l'analyse i
 ## 🚀 Installation & Déploiement
 
 ### Prérequis
+- **Navigateur Google Chrome** (Recommandé pour une compatibilité audio optimale)
 - **Node.js 18+**
 - **Clé API Google Gemini** ([ai.google.dev](https://ai.google.dev/))
 - **Python 3.8+** (Uniquement pour le mode Whisper Local)

@@ -1076,7 +1076,7 @@ Texte à analyser :
                         <div className="flex items-center gap-12 w-full sm:w-auto">
                             <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800 dark:text-white flex items-center gap-2 sm:gap-3">
                                 <Mic className="w-6 h-6 sm:w-8 sm:h-8 text-purple-600 dark:text-purple-500" />
-                                <span className="truncate">Speech-to-Text</span>
+                                <span className="truncate">Speach-to-Text</span>
                             </h1>
                         </div>
                         <img
