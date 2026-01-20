@@ -1,90 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Copy, Download, Save, Trash2, Mic, StopCircle, RefreshCw, FileAudio, Settings, HelpCircle, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun } from 'lucide-react';
-import { jsPDF } from "jspdf";
-import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } from 'docx';
-import { saveAs } from 'file-saver';
-import { GoogleGenAI } from "@google/genai";
-import ArabicReshaper from 'arabic-reshaper';
-import { amiriFont } from './AmiriFont';
+import { Copy, Download, Save, Trash2, Mic, StopCircle, RefreshCw, FileAudio, Settings, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun } from 'lucide-react';
 
-const LanguageSelector = ({ label, value, onChange, languages, disabled, className, isDark }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const containerRef = useRef(null);
+// Components
+import LanguageSelector from './components/LanguageSelector';
+import SettingsModal from './components/SettingsModal';
+import SuccessModal from './components/SuccessModal';
+import EmailModal from './components/EmailModal';
+import TokenCounter from './components/TokenCounter';
+import AudioLevelMeter from './components/AudioLevelMeter';
 
-    useEffect(() => {
-        const handleClickOutside = (event) => {
-            if (containerRef.current && !containerRef.current.contains(event.target)) {
-                setIsOpen(false);
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    const selectedLang = languages.find(l => l.code === value) || languages[0];
-
-    return (
-        <div ref={containerRef} className={`relative flex-1 ${className}`}>
-            <button
-                type="button"
-                onClick={() => !disabled && setIsOpen(!isOpen)}
-                disabled={disabled}
-                className={`w-full flex items-center justify-between px-4 py-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:bg-gray-100 dark:disabled:bg-gray-600 disabled:cursor-not-allowed text-sm sm:text-base h-[46px] sm:h-[50px] transition-all shadow-sm ${isOpen ? 'ring-2 ring-purple-500 border-transparent' : ''}`}
-            >
-                <div className="flex items-center gap-2 overflow-hidden">
-                    <img
-                        src={`https://flagcdn.com/w40/${selectedLang.countryCode}.png`}
-                        alt={selectedLang.name}
-                        className="w-5 h-auto rounded-sm flex-shrink-0 shadow-sm"
-                    />
-                    <span className="truncate">{selectedLang.name.split(' ').slice(1).join(' ') || selectedLang.name}</span>
-                </div>
-                <svg
-                    className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-            </button>
-
-            {isOpen && (
-                <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
-                    <div className="p-1">
-                        {languages.map((lang) => (
-                            <button
-                                key={lang.code}
-                                type="button"
-                                onClick={() => {
-                                    onChange(lang.code);
-                                    setIsOpen(false);
-                                }}
-                                className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-md transition-colors ${value === lang.code
-                                    ? 'bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300'
-                                    : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50'
-                                    }`}
-                            >
-                                <img
-                                    src={`https://flagcdn.com/w40/${lang.countryCode}.png`}
-                                    alt={lang.name}
-                                    className="w-5 h-auto rounded-sm flex-shrink-0 shadow-sm"
-                                />
-                                <span className="flex-1 text-left">{lang.name.split(' ').slice(1).join(' ') || lang.name}</span>
-                                {value === lang.code && (
-                                    <svg className="w-4 h-4 text-purple-500" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                    </svg>
-                                )}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
+// Services & Utils
+import { languages } from './constants';
+import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
+import { trimSilence } from './utils/audioUtils';
+import { generatePDF, downloadDOCX } from './services/exportService';
 
 export default function SpeechToTextApp() {
     // -----------------------------------------------------------------
@@ -95,7 +24,7 @@ export default function SpeechToTextApp() {
     const [interimTranscript, setInterimTranscript] = useState('');
     const [translatedTranscript, setTranslatedTranscript] = useState('');
     const [enableTranslation, setEnableTranslation] = useState(() => {
-        return localStorage.getItem('enableTranslation') === 'true'; // Default false
+        return localStorage.getItem('enableTranslation') === 'true';
     });
     const [language, setLanguage] = useState('fr-FR');
     const [targetLanguage, setTargetLanguage] = useState('en-US');
@@ -105,7 +34,13 @@ export default function SpeechToTextApp() {
     // AI Agent States
     const [showSettings, setShowSettings] = useState(false);
     const [transcriptionMode, setTranscriptionMode] = useState('post'); // 'live' or 'post'
-    const [autoAnalyze, setAutoAnalyze] = useState(true); // Toggle for chaining
+    const [transcriptionEngine, setTranscriptionEngine] = useState(() => {
+        return localStorage.getItem('transcriptionEngine') || 'google'; // 'google' or 'whisper'
+    });
+    const [whisperUrl, setWhisperUrl] = useState(() => {
+        return localStorage.getItem('whisperUrl') || 'http://localhost:5000/transcribe';
+    });
+    const [autoAnalyze, setAutoAnalyze] = useState(true);
     const [aiInstructions, setAiInstructions] = useState(() => {
         return localStorage.getItem('aiInstructions') || `Corrige ce texte en:
 1) vérifiant l'orthographe,
@@ -127,7 +62,7 @@ export default function SpeechToTextApp() {
         return localStorage.getItem('darkMode') === 'true';
     });
     const [audioBlob, setAudioBlob] = useState(null);
-    const [autoStopSilence, setAutoStopSilence] = useState(true); // Default enabled as per user request
+    const [autoStopSilence, setAutoStopSilence] = useState(true);
     const [silenceCountdown, setSilenceCountdown] = useState(15);
     const [volumeLevel, setVolumeLevel] = useState(0);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -140,19 +75,19 @@ export default function SpeechToTextApp() {
         lastResponse: 0,
         totalSession: 0
     });
-    const [speakingSection, setSpeakingSection] = useState(null); // 'transcript', 'translation', 'ai'
+    const [speakingSection, setSpeakingSection] = useState(null);
     const [errorLogs, setErrorLogs] = useState([]);
     const [isRateLimited, setIsRateLimited] = useState(false);
     const [retryDelay, setRetryDelay] = useState(0);
 
     // Audio Settings
     const [enableSystemAudio, setEnableSystemAudio] = useState(() => {
-        return localStorage.getItem('enableSystemAudio') === 'true'; // Default false
+        return localStorage.getItem('enableSystemAudio') === 'true';
     });
 
     const [pdfJustify, setPdfJustify] = useState(() => {
         const saved = localStorage.getItem('pdfJustify');
-        return saved !== null ? saved === 'true' : true; // Default true
+        return saved !== null ? saved === 'true' : true;
     });
 
     const [isDragging, setIsDragging] = useState(false);
@@ -255,12 +190,44 @@ export default function SpeechToTextApp() {
         setTimeout(() => setNotification(null), 3000); // Hide after 3 seconds
     };
 
-    const logError = (message) => {
-        const timestamp = new Date().toISOString();
-        const logEntry = `[${timestamp}] ${message}`;
-        console.error(logEntry);
+    const logError = (error, context = "") => {
+        const timestamp = new Date().toLocaleTimeString();
+        let errorMessage = error;
+        let details = "";
+
+        // Handle Error objects
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            if (error.stack) details = error.stack;
+        }
+        // Handle object errors (often from API)
+        else if (typeof error === 'object') {
+            try {
+                errorMessage = JSON.stringify(error);
+                // Try to extract readable message from common API error formats
+                if (error.message) errorMessage = error.message;
+                if (error.error && error.error.message) errorMessage = error.error.message;
+            } catch (e) {
+                errorMessage = "Objet erreur non parsable";
+            }
+        }
+
+        // Clean up common JSON error strings
+        if (typeof errorMessage === 'string' && errorMessage.startsWith('{"error":')) {
+            try {
+                const parsed = JSON.parse(errorMessage);
+                if (parsed.error && parsed.error.message) {
+                    errorMessage = `${parsed.error.code ? `[${parsed.error.code}] ` : ''}${parsed.error.message}`;
+                    if (parsed.error.status) errorMessage += ` (${parsed.error.status})`;
+                }
+            } catch (e) { /* ignore parse error */ }
+        }
+
+        const logEntry = `[${timestamp}] ${context ? `[${context}] ` : ''}${errorMessage}`;
+        console.error("APP ERROR:", logEntry, details);
+
         setErrorLogs(prev => [...prev, logEntry]);
-        showNotification("Erreur détectée (voir logs)");
+        showNotification(`Erreur${context ? ' ' + context : ''}: ${errorMessage.substring(0, 100)}${errorMessage.length > 100 ? '...' : ''}`);
     };
 
     const downloadErrorLog = () => {
@@ -285,7 +252,9 @@ export default function SpeechToTextApp() {
         localStorage.setItem('language', language);
         localStorage.setItem('targetLanguage', targetLanguage);
         localStorage.setItem('enableSystemAudio', enableSystemAudio);
-    }, [aiInstructions, aiModel, enableTranslation, language, targetLanguage, enableSystemAudio]);
+        localStorage.setItem('transcriptionEngine', transcriptionEngine);
+        localStorage.setItem('whisperUrl', whisperUrl);
+    }, [aiInstructions, aiModel, enableTranslation, language, targetLanguage, enableSystemAudio, transcriptionEngine, whisperUrl]);
 
     // Auto-scroll Transcript
     useEffect(() => {
@@ -301,77 +270,6 @@ export default function SpeechToTextApp() {
         }
     }, [aiResult]);
 
-    const delay = (ms) => new Promise(res => setTimeout(res, ms));
-
-    const callGemini = async (model, contents, maxRetries = 3) => {
-        const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-        let attempt = 0;
-
-        while (attempt <= maxRetries) {
-            try {
-                // Check if we should use the Netlify function (Production or explicit testing)
-                // We try the function first if not local, or if we want to force server-side
-                if (!isLocal) {
-                    const resp = await fetch('/.netlify/functions/gemini', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ model, contents })
-                    });
-
-                    if (resp.ok) {
-                        setIsRateLimited(false);
-                        setRetryDelay(0);
-                        return await resp.json();
-                    } else {
-                        const errData = await resp.json();
-
-                        // Handle 429 Resource Exhausted
-                        if (resp.status === 429 || (errData.error && errData.error.includes("429"))) {
-                            throw { status: 429, message: errData.error || "Resource exhausted" };
-                        }
-
-                        console.error("Netlify Function Error:", errData);
-                    }
-                } else {
-                    // Client-side fallback / Local Dev
-                    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-                    if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
-                        throw new Error("Clé API Gemini manquante. Veuillez configurer VITE_GEMINI_API_KEY.");
-                    }
-                    const client = new GoogleGenAI({ apiKey });
-                    const result = await client.models.generateContent({ model, contents });
-                    setIsRateLimited(false);
-                    setRetryDelay(0);
-                    return result;
-                }
-            } catch (err) {
-                const isRateLimitError = err.status === 429 || (err.message && err.message.includes("429")) || (err.message && err.message.includes("RESOURCE_EXHAUSTED"));
-
-                if (isRateLimitError && attempt < maxRetries) {
-                    attempt++;
-                    const waitTime = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
-                    console.warn(`Gemini API rate limited (429). Retry attempt ${attempt}/${maxRetries} in ${Math.round(waitTime)}ms...`);
-
-                    setIsRateLimited(true);
-                    setRetryDelay(Math.round(waitTime / 1000));
-
-                    // Update countdown every second
-                    const countdownInterval = setInterval(() => {
-                        setRetryDelay(prev => Math.max(0, prev - 1));
-                    }, 1000);
-
-                    await delay(waitTime);
-                    clearInterval(countdownInterval);
-                    continue;
-                }
-
-                setIsRateLimited(false);
-                setRetryDelay(0);
-                throw err;
-            }
-            attempt++;
-        }
-    };
 
     const handleSpeak = (text, section, langCode) => {
         if (speakingSection === section) {
@@ -434,268 +332,9 @@ export default function SpeechToTextApp() {
         }
     };
 
-    const translateWithGemini = async (text, sourceLang, targetLang) => {
-        if (!text) return '';
-        try {
-            const prompt = `Traduire le texte suivant de la langue "${sourceLang}" vers la langue "${targetLang}". Ne renvoie QUE la traduction, sans aucun commentaire : "${text}"`;
 
-            const response = await callGemini('gemini-2.0-flash', [
-                { role: 'user', parts: [{ text: prompt }] }
-            ]);
 
-            // Track tokens
-            updateUsage(response);
-
-            const translated = extractTextFromResponse(response);
-            return translated || `[Erreur de traduction]`;
-        } catch (error) {
-            console.error("Translation Error:", error);
-            return `[Erreur: ${error.message}]`;
-        }
-    };
-
-    const reshapeArabic = (text) => {
-        if (!text) return "";
-        const hasArabic = /[\u0600-\u06FF]/.test(text);
-        if (!hasArabic) return text;
-
-        try {
-            // Step 1: Reshape characters (handle connections/ligatures)
-            // Note: We don't reverse here anymore, we'll do it line-by-line in PDF export
-            // to ensure correct word order when wrapping and handles BiDi.
-            return ArabicReshaper.convertArabic(text);
-        } catch (e) {
-            console.error("Arabic Reshaping Error:", e);
-            return text;
-        }
-    };
-
-    /**
-     * Helper to prepare text for RTL rendering.
-     * UPDATED: We now avoid full character reversal because modern PDF readers
-     * (Chrome, Acrobat) often handle RTL automatically if they see Arabic glyphs.
-     * Manual reversal can cause "double-reversal" (looking backwards in the viewer).
-     * We still keep reshaping to ensure characters connect correctly.
-     */
-    const prepareRTLText = (text) => {
-        if (!text) return "";
-        // Step 1: Reshape (handle connections/ligatures)
-        const reshaped = ArabicReshaper.convertArabic(text);
-
-        // Step 2: Return as is (logical order).
-        // Modern PDF readers (Chrome/Acrobat) handle RTL automatically for Arabic glyphs.
-        // Copy-paste will also preserve the correct logical order.
-        return reshaped;
-    };
-    const trimSilence = async (audioBlob) => {
-        try {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const arrayBuffer = await audioBlob.arrayBuffer();
-            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-            const channelData = audioBuffer.getChannelData(0);
-            const sampleRate = audioBuffer.sampleRate;
-            const threshold = 0.01;
-
-            let start = 0;
-            while (start < channelData.length && Math.abs(channelData[start]) < threshold) {
-                start++;
-            }
-
-            let end = channelData.length - 1;
-            while (end > start && Math.abs(channelData[end]) < threshold) {
-                end--;
-            }
-
-            if (start >= end) return audioBlob; // No sound found or very short, return original
-
-            const duration = (end - start) / sampleRate;
-            const newBuffer = audioContext.createBuffer(
-                audioBuffer.numberOfChannels,
-                end - start,
-                sampleRate
-            );
-
-            for (let i = 0; i < audioBuffer.numberOfChannels; i++) {
-                newBuffer.copyToChannel(audioBuffer.getChannelData(i).subarray(start, end), i);
-            }
-
-            // Convert AudioBuffer to WAV Blob
-            return bufferToWav(newBuffer);
-        } catch (e) {
-            console.error("Trim Silence error:", e);
-            return audioBlob; // Fallback to original
-        }
-    };
-
-    // Helper to convert AudioBuffer to WAV
-    function bufferToWav(abuffer) {
-        let numOfChan = abuffer.numberOfChannels,
-            length = abuffer.length * numOfChan * 2 + 44,
-            buffer = new ArrayBuffer(length),
-            view = new DataView(buffer),
-            channels = [], i, sample,
-            offset = 0,
-            pos = 0;
-
-        // write WAVE header
-        setUint32(0x46464952);                         // "RIFF"
-        setUint32(length - 8);                         // file length - 8
-        setUint32(0x45564157);                         // "WAVE"
-        setUint32(0x20746d66);                         // "fmt " chunk
-        setUint32(16);                                  // length = 16
-        setUint16(1);                                   // PCM (uncompressed)
-        setUint16(numOfChan);
-        setUint32(abuffer.sampleRate);
-        setUint32(abuffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
-        setUint16(numOfChan * 2);                      // block-align
-        setUint16(16);                                  // 16-bit (hardcoded)
-        setUint32(0x61746164);                         // "data" - chunk
-        setUint32(length - pos - 4);                   // chunk length
-
-        // write interleaved data
-        for (i = 0; i < abuffer.numberOfChannels; i++)
-            channels.push(abuffer.getChannelData(i));
-
-        while (pos < length) {
-            for (i = 0; i < numOfChan; i++) {             // interleave channels
-                sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
-                sample = (sample < 0 ? sample * 0x8000 : sample * 0x7FFF) | 0; // scale to 16-bit signed int
-                view.setInt16(pos, sample, true);          // write 16-bit sample
-                pos += 2;
-            }
-            offset++
-        }
-
-        return new Blob([buffer], { type: "audio/wav" });
-
-        function setUint16(data) {
-            view.setUint16(pos, data, true);
-            pos += 2;
-        }
-
-        function setUint32(data) {
-            view.setUint32(pos, data, true);
-            pos += 4;
-        }
-    }
-
-    const fileToGenerativePart = async (file) => {
-        const base64EncodedDataPromise = new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result.split(',')[1]);
-            reader.readAsDataURL(file);
-        });
-
-        // Gemini is VERY strict about mimeType.
-        // 1. Strip codec parameters (e.g., "audio/webm;codecs=opus" -> "audio/webm")
-        let mimeType = file.type.split(';')[0].trim();
-
-        // 2. Map video/webm (common audio-only container) to audio/webm
-        if (mimeType === 'video/webm') mimeType = 'audio/webm';
-
-        // 3. Fallback for empty mimeType based on extension
-        if (!mimeType && file.name) {
-            const ext = file.name.split('.').pop().toLowerCase();
-            if (ext === 'mp3') mimeType = 'audio/mpeg';
-            else if (ext === 'wav') mimeType = 'audio/wav';
-            else if (ext === 'webm') mimeType = 'audio/webm';
-        }
-
-        return {
-            inlineData: { data: await base64EncodedDataPromise, mimeType: mimeType || 'audio/mpeg' },
-        };
-    };
-
-    // Helper to extract token usage from response (highly robust)
-    const updateUsage = (response) => {
-        if (!response) return;
-
-        try {
-            // Priority: usageMetadata (standard genai response)
-            // Fallbacks: usage, usage_metadata, or root-level token counts
-            const m = response.usageMetadata || response.usage || response.usage_metadata || response;
-
-            const p = m.promptTokenCount ?? m.promptTokens ?? m.prompt_tokens ?? m.input_tokens ?? 0;
-            const r = m.candidatesTokenCount ?? m.completionTokens ?? m.completion_tokens ?? m.output_tokens ?? 0;
-            const t = m.totalTokenCount ?? m.totalTokens ?? m.total_tokens ?? (p + r);
-
-            if (p > 0 || r > 0) {
-                setTokenUsage(prev => ({
-                    lastPrompt: p,
-                    lastResponse: r,
-                    totalSession: prev.totalSession + t
-                }));
-            }
-        } catch (e) {
-            console.warn("Usage metadata extraction failed:", e);
-        }
-    };
-
-    const extractTextFromResponse = (response) => {
-        if (!response) return "";
-
-        try {
-            // Unary response for @google/genai (new)
-            if (typeof response.text === 'string') return response.text;
-
-            // Response object for @google/generative-ai (classic)
-            if (typeof response.text === 'function') {
-                const text = response.text();
-                // If it's still a function or object, we need to dig deeper
-                if (typeof text === 'string') return text;
-            }
-
-            // Deep Candidate extraction (Shared Logic)
-            if (response.candidates && response.candidates[0]?.content?.parts) {
-                const parts = response.candidates[0].content.parts;
-                const text = parts.map(p => {
-                    // Parts can have .text directly or nested .text.text in some weird cases
-                    if (typeof p.text === 'string') return p.text;
-                    if (typeof p.text === 'object' && p.text?.text) return p.text.text;
-                    if (typeof p === 'string') return p;
-                    return '';
-                }).join('').trim();
-                if (text) return text;
-            }
-
-            // Choice-based extraction (OpenAI-compatible wrappers)
-            if (response.choices && response.choices[0]?.message?.content) {
-                return response.choices[0].message.content;
-            }
-
-            // Recursive Search (Fallback for unknown structures) - PROTECTED to return ONLY strings
-            const deepSearch = (obj, depth = 0) => {
-                if (depth > 5 || !obj || typeof obj !== 'object') return null;
-
-                // Prioritize common text keys
-                const keys = ['text', 'content', 'parts', 'candidates', 'choices', 'message'];
-                for (const key of keys) {
-                    const val = obj[key];
-                    if (typeof val === 'string' && val.trim().length > 0) return val;
-                    if (typeof val === 'object') {
-                        const found = deepSearch(val, depth + 1);
-                        if (found) return found;
-                    }
-                }
-                return null;
-            };
-
-            const fallbackText = deepSearch(response);
-            if (typeof fallbackText === 'string') return fallbackText;
-
-        } catch (e) {
-            console.error("Extraction error:", e);
-        }
-
-        // Final fallback: log structure and return empty string (NEVER an object)
-        console.warn("Gemini Response Structure Unknown:", response);
-        return "";
-    };
-
-    const transcribeAudioWithGemini = async (directBlob = null) => {
-        // Use directBlob if provided (from AutoSave) AND is a Blob, otherwise state blob
-        // This prevents the Click Event from being treated as a Blob when called via onClick
+    const transcribePostProcess = async (directBlob = null) => {
         const blobToUse = (directBlob instanceof Blob) ? directBlob : audioBlob;
 
         if (!blobToUse) {
@@ -703,30 +342,59 @@ export default function SpeechToTextApp() {
             return;
         }
 
-        setIsProcessingAI(true);
         setIsTranscribing(true);
         if (!isAutoSavingRef.current) setAiResult('');
 
         try {
-            const audioPart = await fileToGenerativePart(blobToUse);
-            const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
+            let text = "";
 
-            const response = await callGemini('gemini-2.0-flash', [
-                { role: 'user', parts: [{ text: prompt }, audioPart] }
-            ]);
+            if (transcriptionEngine === 'whisper') {
+                showNotification("Transcription locale (Whisper) en cours...");
+                text = await transcribeWithWhisper(blobToUse, whisperUrl);
+            } else {
+                showNotification("Transcription cloud (Gemini) en cours...");
 
-            // Track tokens
-            updateUsage(response);
+                // Convert WebM to WAV for Gemini compatibility
+                let processedBlob = blobToUse;
+                if (blobToUse.type.includes('webm')) {
+                    try {
+                        processedBlob = await trimSilence(blobToUse);
+                    } catch (e) {
+                        console.error("Audio conversion failed, trying raw:", e);
+                    }
+                }
 
-            const text = extractTextFromResponse(response);
+                const audioPart = await fileToGenerativePart(processedBlob);
+                const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
+
+                const response = await callGemini('gemini-2.0-flash-exp', [
+                    {
+                        role: 'user',
+                        parts: [
+                            { text: prompt },
+                            audioPart
+                        ]
+                    }
+                ]);
+
+                // Track tokens
+                if (response.usageMetadata) {
+                    const m = response.usageMetadata;
+                    setTokenUsage(prev => ({
+                        lastPrompt: m.promptTokenCount,
+                        lastResponse: m.candidatesTokenCount,
+                        totalSession: prev.totalSession + m.totalTokenCount
+                    }));
+                }
+
+                text = extractTextFromResponse(response);
+            }
 
             if (text) {
-                // If we are in high-accuracy mode (post-processing),
-                // we overwrite the transcript with the result.
                 setTranscript(text);
 
                 if (autoAnalyze) {
-                    showNotification("Transcription audio terminée ! Analyse IA en cours...");
+                    showNotification("Transcription terminée ! Analyse IA en cours...");
                     await processWithAI(text);
                 } else {
                     showNotification("Transcription terminée !");
@@ -735,19 +403,18 @@ export default function SpeechToTextApp() {
                     }
                 }
             } else {
-                throw new Error("Réponse de transcription vide (structure inconnue).");
+                throw new Error("Réponse de transcription vide.");
             }
         } catch (error) {
-            console.error("Gemini Audio Error:", error);
-            logError("Erreur Transcription Audio: " + error.message);
-            showNotification("Erreur lors de la transcription audio Gemini: " + error.message);
+            console.error("Transcription Error:", error);
+            logError(error, "Transcription");
+            showNotification("Erreur lors de la transcription: " + error.message);
             if (isAutoSavingRef.current) {
-                // Even if transcription fails, try to save audio/error logs
                 finalizeAutoSave(null);
             }
         } finally {
             setIsTranscribing(false);
-            if (!isAutoSavingRef.current) setIsProcessingAI(false); // If chaining, let processWithAI handle it
+            if (!isAutoSavingRef.current) setIsProcessingAI(false);
         }
     };
 
@@ -784,7 +451,14 @@ Texte à analyser :
             ]);
 
             // Track tokens
-            updateUsage(response);
+            if (response.usageMetadata) {
+                const m = response.usageMetadata;
+                setTokenUsage(prev => ({
+                    lastPrompt: m.promptTokenCount,
+                    lastResponse: m.candidatesTokenCount,
+                    totalSession: prev.totalSession + m.totalTokenCount
+                }));
+            }
 
             const text = extractTextFromResponse(response);
 
@@ -801,7 +475,7 @@ Texte à analyser :
             }
 
         } catch (error) {
-            logError(`Erreur AI: ${error.message || error}`);
+            logError(error, "Analyse IA");
             setAiResult(`Erreur lors de l'analyse IA : ${error.message || "Erreur inconnue"}`);
             // If failed, still try to save what we have
             if (isAutoSavingRef.current) {
@@ -1112,7 +786,7 @@ Texte à analyser :
                 // Trigger Chain if AutoSaving
                 if (isAutoSavingRef.current) {
                     // ALWAYS use high-accuracy transcription for auto-save
-                    transcribeAudioWithGemini(blob);
+                    transcribePostProcess(blob);
                 }
             };
 
@@ -1120,7 +794,7 @@ Texte à analyser :
             mediaRecorderRef.current = recorder;
 
         } catch (err) {
-            logError("Erreur startRecording: " + err.message);
+            logError(err, "Microphone");
             setIsListening(false);
             isListeningRef.current = false;
             alert("Erreur microphone/audio : " + (err.message || err));
@@ -1266,289 +940,35 @@ Texte à analyser :
         showNotification("Fichier Audio téléchargé !");
     };
 
-    const generatePDF = () => {
-        const currentTranscript = transcriptRef.current;
-        const currentAIResult = aiResultRef.current;
-        const currentTranslation = translatedTranscriptRef.current;
-
-        if (!currentTranscript && !currentAIResult) return null;
-
-        const doc = new jsPDF();
-        const pageWidth = doc.internal.pageSize.getWidth();
-        const pageHeight = doc.internal.pageSize.getHeight();
-        const margin = 10;
-        const availableWidth = pageWidth - margin * 2;
-        let yPosition = 20;
-
-        doc.addFileToVFS('Amiri-Regular.ttf', amiriFont);
-        doc.addFont('Amiri-Regular.ttf', 'Amiri', 'normal');
-
-        doc.setFontSize(11);
-        doc.setTextColor(0, 0, 0);
-        doc.setFont("helvetica", "normal");
-
-        // Helper for consistent text rendering with Arabic support
-        const writeParagraphs = (text, x, y, width, align = 'left') => {
-            const paragraphs = text.split('\n');
-            const innerLineHeight = 6;
-            let currentY = y;
-
-            for (let p = 0; p < paragraphs.length; p++) {
-                const paragraph = paragraphs[p];
-                if (!paragraph.trim()) {
-                    if (p < paragraphs.length - 1) currentY += innerLineHeight;
-                    continue;
-                }
-
-                const isArabic = /[\u0600-\u06FF]/.test(paragraph);
-                doc.setFont(isArabic ? "Amiri" : "helvetica", "normal");
-
-                // Reshape but don't reverse paragraph level (avoid wrapping issues)
-                const reshapedPara = isArabic ? ArabicReshaper.convertArabic(paragraph) : paragraph;
-                const lines = doc.splitTextToSize(reshapedPara, width);
-
-                for (let i = 0; i < lines.length; i++) {
-                    if (currentY > pageHeight - 20) {
-                        doc.addPage();
-                        currentY = 20;
-                        // On new page, we should stick to the current font
-                        doc.setFont(isArabic ? "Amiri" : "helvetica", "normal");
-                    }
-
-                    let line = lines[i];
-                    let currentAlign = align;
-                    let currentX = x;
-
-                    if (isArabic) {
-                        // Prepare lines for RTL while preserving logical order
-                        line = prepareRTLText(line);
-                        currentAlign = 'right';
-                        currentX = x + width;
-                    }
-
-                    const isLastLine = i === lines.length - 1;
-                    const options = (pdfJustify && !isLastLine && !isArabic)
-                        ? { align: 'justify', maxWidth: width }
-                        : { align: currentAlign };
-
-                    doc.text(line, currentX, currentY, options);
-                    currentY += innerLineHeight;
-                }
-                currentY += 2; // Extra spacer between paragraphs
-            }
-            return currentY;
-        };
-
-        if (currentAIResult) {
-            // ONLY AI Result Mode
-            doc.setFontSize(14);
-            doc.setFont("helvetica", "bold");
-            doc.text("Encounter", margin, yPosition);
-            yPosition += 10;
-
-            doc.setFontSize(11);
-            yPosition = writeParagraphs(currentAIResult, margin, yPosition, availableWidth, 'left');
-        } else {
-            // Transcript Mode (Original + optional Translation)
-            if (enableTranslation) {
-                const colGap = 10;
-                const colWidth = (availableWidth - colGap) / 2;
-
-                // Column Headers
-                doc.setFont("helvetica", "bold");
-                doc.text("Original", margin, yPosition);
-                doc.text(`Traduction (${targetLanguage})`, margin + colWidth + colGap, yPosition);
-                yPosition += 7;
-                doc.setFont("helvetica", "normal");
-
-                // Process paragraphs to keep original and translation relatively aligned
-                const originalParagraphs = currentTranscript.split('\n');
-                const translatedParagraphs = currentTranslation.split('\n');
-                const maxPara = Math.max(originalParagraphs.length, translatedParagraphs.length);
-                const lineHeight = 5;
-
-                for (let i = 0; i < maxPara; i++) {
-                    const origPara = originalParagraphs[i] || "";
-                    const transPara = translatedParagraphs[i] || "";
-
-                    const isArabicOrig = /[\u0600-\u06FF]/.test(origPara);
-                    const isArabicTrans = /[\u0600-\u06FF]/.test(transPara);
-
-                    const reshapedOrig = isArabicOrig ? ArabicReshaper.convertArabic(origPara) : origPara;
-                    const reshapedTrans = isArabicTrans ? ArabicReshaper.convertArabic(transPara) : transPara;
-
-                    // Split each column
-                    doc.setFont(isArabicOrig ? "Amiri" : "helvetica", "normal");
-                    const splitOrig = doc.splitTextToSize(reshapedOrig, colWidth);
-
-                    doc.setFont(isArabicTrans ? "Amiri" : "helvetica", "normal");
-                    const splitTrans = doc.splitTextToSize(reshapedTrans, colWidth);
-
-                    const paraLines = Math.max(splitOrig.length, splitTrans.length);
-
-                    // Check if we need a new page
-                    if (yPosition + (paraLines * lineHeight) > pageHeight - 20 && yPosition > 30) {
-                        doc.addPage();
-                        yPosition = 20;
-                        doc.setFont("helvetica", "bold");
-                        doc.text("Original", margin, yPosition);
-                        doc.text(`Traduction (${targetLanguage})`, margin + colWidth + colGap, yPosition);
-                        yPosition += 7;
-                    }
-
-                    // Render lines side-by-side
-                    for (let j = 0; j < paraLines; j++) {
-                        if (yPosition > pageHeight - 20) {
-                            doc.addPage();
-                            yPosition = 20;
-                            doc.setFont("helvetica", "bold");
-                            doc.text("Original", margin, yPosition);
-                            doc.text(`Traduction (${targetLanguage})`, margin + colWidth + colGap, yPosition);
-                            yPosition += 7;
-                        }
-
-                        // Original column
-                        if (j < splitOrig.length) {
-                            doc.setFont(isArabicOrig ? "Amiri" : "helvetica", "normal");
-                            let line = splitOrig[j];
-                            let xPos = margin;
-                            let align = 'left';
-                            if (isArabicOrig) {
-                                line = prepareRTLText(line);
-                                xPos = margin + colWidth;
-                                align = 'right';
-                            }
-                            const isLastLine = j === splitOrig.length - 1;
-                            const options = (pdfJustify && !isLastLine && !isArabicOrig) ? { align: 'justify', maxWidth: colWidth } : { align };
-                            doc.text(line, xPos, yPosition, options);
-                        }
-
-                        // Translation column
-                        if (j < splitTrans.length) {
-                            doc.setFont(isArabicTrans ? "Amiri" : "helvetica", "normal");
-                            let line = splitTrans[j];
-                            let xPos = margin + colWidth + colGap;
-                            let align = 'left';
-                            if (isArabicTrans) {
-                                line = prepareRTLText(line);
-                                xPos = margin + colWidth + colGap + colWidth;
-                                align = 'right';
-                            }
-                            const isLastLine = j === splitTrans.length - 1;
-                            const options = (pdfJustify && !isLastLine && !isArabicTrans) ? { align: 'justify', maxWidth: colWidth } : { align };
-                            doc.text(line, xPos, yPosition, options);
-                        }
-
-                        yPosition += lineHeight;
-                    }
-                    yPosition += 2; // Paragraph space
-                }
-            } else {
-                // Single Column
-                yPosition = writeParagraphs(currentTranscript, margin, yPosition, availableWidth, 'left');
-            }
-        }
-
-        // Pagination & Date
-        const totalPages = doc.internal.getNumberOfPages();
-        const currentDate = new Date().toLocaleDateString('fr-FR');
-        for (let i = 1; i <= totalPages; i++) {
-            doc.setPage(i);
-            doc.setFontSize(10);
-            doc.setTextColor(150);
-            const footerText = `Page ${i} / ${totalPages} - ${currentDate}`;
-            doc.text(footerText, pageWidth / 2, pageHeight - 10, { align: 'center' });
-        }
-
-        return doc;
-    };
-
-    const downloadDOCX = async () => {
-        const currentTranscript = transcriptRef.current;
-        const currentAIResult = aiResultRef.current;
-        const currentTranslation = translatedTranscriptRef.current;
-
-        if (!currentTranscript && !currentAIResult) {
-            showNotification("Rien à exporter.");
-            return;
-        }
-
-        const sections = [];
-        const children = [];
-
-        // Title
-        children.push(new Paragraph({
-            text: "Rapport de Transcription Encounter",
-            heading: HeadingLevel.HEADING_1,
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 400 },
-        }));
-
-        // Date & Info
-        children.push(new Paragraph({
-            children: [
-                new TextRun({ text: `Date : ${new Date().toLocaleDateString('fr-FR')}`, bold: true }),
-                new TextRun({ break: 1, text: `Modèle utilisé : ${aiModel}` }),
-            ],
-            spacing: { after: 400 },
-        }));
-
-        if (currentAIResult) {
-            children.push(new Paragraph({ text: "Analyse de l'Agent IA", heading: HeadingLevel.HEADING_2, spacing: { before: 400, after: 200 } }));
-            children.push(new Paragraph({
-                children: [new TextRun(currentAIResult)],
-                alignment: pdfJustify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
-                spacing: { after: 400 },
-            }));
-        }
-
-        if (currentTranscript) {
-            children.push(new Paragraph({ text: "Transcription Originale", heading: HeadingLevel.HEADING_2, spacing: { before: 400, after: 200 } }));
-            children.push(new Paragraph({
-                children: [new TextRun(currentTranscript)],
-                alignment: pdfJustify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
-                spacing: { after: 400 },
-            }));
-        }
-
-        if (enableTranslation && currentTranslation) {
-            children.push(new Paragraph({ text: `Traduction (${targetLanguage})`, heading: HeadingLevel.HEADING_2, spacing: { before: 400, after: 200 } }));
-            children.push(new Paragraph({
-                children: [new TextRun(currentTranslation)],
-                alignment: pdfJustify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
-                spacing: { after: 400 },
-            }));
-        }
-
-        // Footer-like info
-        children.push(new Paragraph({
-            children: [new TextRun({ text: "Généré par SpeachToText - Encounter AI", italic: true, size: 18 })],
-            alignment: AlignmentType.CENTER,
-            spacing: { before: 800 },
-        }));
-
-        const doc = new Document({
-            sections: [{
-                properties: {},
-                children: children,
-            }],
-        });
-
-        try {
-            const blob = await Packer.toBlob(doc);
-            saveAs(blob, `encounter-report-${new Date().toISOString().slice(0, 10)}.docx`);
-            showNotification("Fichier Word (.docx) généré !");
-        } catch (error) {
-            console.error("DOCX generation error:", error);
-            showNotification("Erreur lors de la génération Word.");
-        }
-    };
 
     const downloadPDF = () => {
-        const doc = generatePDF();
-        if (!doc) return;
-        doc.save(`export-${new Date().toISOString().slice(0, 10)}.pdf`);
-        showNotification("Fichier PDF enregistré !");
+        const doc = generatePDF({
+            transcript: transcriptRef.current,
+            aiResult: aiResultRef.current,
+            translatedTranscript: translatedTranscriptRef.current,
+            enableTranslation,
+            targetLanguage,
+            pdfJustify
+        });
+
+        if (doc) {
+            doc.save(`transcription-${new Date().toISOString().slice(0, 10)}.pdf`);
+            showNotification("Fichier PDF téléchargé !");
+            setHasDownloadedPDF(true);
+        }
+    };
+
+    const handleDownloadDOCX = async () => {
+        await downloadDOCX({
+            transcript: transcriptRef.current,
+            aiResult: aiResultRef.current,
+            translatedTranscript: translatedTranscriptRef.current,
+            enableTranslation,
+            targetLanguage,
+            aiModel,
+            pdfJustify
+        });
+        showNotification("Fichier Word téléchargé !");
     };
 
     const openEmailModal = () => {
@@ -1677,8 +1097,9 @@ Texte à analyser :
                                 className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
                                 title="Paramètres de l'Agent IA"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
+                                <Settings className="w-6 h-6" />
                             </button>
+                            <TokenCounter tokenUsage={tokenUsage} onReset={resetTokenUsage} />
                         </div>
                     </div>
 
@@ -1842,39 +1263,7 @@ Texte à analyser :
                         </div>
 
                         {/* Audio Level Meter */}
-                        {isListening && (
-                            <div className="w-full bg-gray-100 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-200 dark:border-gray-600 animate-in fade-in zoom-in duration-300">
-                                <div className="flex items-center justify-between mb-1.5">
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
-                                        <div className="flex gap-0.5">
-                                            <div className="w-0.5 h-2 bg-purple-500 rounded-full animate-pulse" style={{ animationDelay: '0s' }}></div>
-                                            <div className="w-0.5 h-3 bg-purple-500 rounded-full animate-pulse" style={{ animationDelay: '0.1s' }}></div>
-                                            <div className="w-0.5 h-2 bg-purple-500 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
-                                        </div>
-                                        Niveau Signal
-                                    </span>
-                                    <span className="text-[10px] font-mono font-medium text-purple-600 dark:text-purple-400">
-                                        {Math.round((volumeLevel / 128) * 100)}%
-                                    </span>
-                                </div>
-                                <div className="w-full h-2 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden flex gap-0.5">
-                                    {/* Create a segmented LED-style meter */}
-                                    {[...Array(20)].map((_, i) => (
-                                        <div
-                                            key={i}
-                                            className={`h-full flex-1 rounded-sm transition-all duration-75 ${(volumeLevel / 128) > (i / 20)
-                                                ? i > 15
-                                                    ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'
-                                                    : i > 10
-                                                        ? 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.5)]'
-                                                        : 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]'
-                                                : 'bg-gray-300 dark:bg-gray-900 border-none shadow-none'
-                                                }`}
-                                        ></div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                        <AudioLevelMeter isListening={isListening} volumeLevel={volumeLevel} />
                     </div>
 
                     {/* Post-Processing Transcription Trigger */}
@@ -1892,7 +1281,7 @@ Texte à analyser :
                                 </p>
                             </div>
                             <button
-                                onClick={transcribeAudioWithGemini}
+                                onClick={transcribePostProcess}
                                 disabled={isProcessingAI}
                                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium shadow-md transition-colors flex items-center gap-2"
                             >
@@ -2177,7 +1566,7 @@ Texte à analyser :
                             PDF
                         </button>
                         <button
-                            onClick={downloadDOCX}
+                            onClick={handleDownloadDOCX}
                             disabled={!transcript && !aiResult}
                             className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
                         >
@@ -2276,219 +1665,38 @@ Texte à analyser :
                 )}
             </div>
 
-            {/* AI Settings Modal */}
-            {
-                showSettings && (
-                    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-lg w-full transform transition-all border border-gray-100 dark:border-gray-700">
-                            <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-settings text-gray-600 dark:text-gray-400"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
-                                Configuration de l'Agent IA
-                            </h2>
+            {/* Modals */}
+            <SettingsModal
+                show={showSettings}
+                onClose={() => setShowSettings(false)}
+                aiModel={aiModel}
+                setAiModel={setAiModel}
+                aiInstructions={aiInstructions}
+                setAiInstructions={setAiInstructions}
+                pdfJustify={pdfJustify}
+                setPdfJustify={setPdfJustify}
+                transcriptionEngine={transcriptionEngine}
+                setTranscriptionEngine={setTranscriptionEngine}
+                whisperUrl={whisperUrl}
+                setWhisperUrl={setWhisperUrl}
+            />
 
-                            {/* Model Configuration */}
-                            <div className="mb-4">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                    Modèle Gemini (ex: gemini-2.0-flash, gemini-2.5-flash, gemini-3-flash)
-                                </label>
-                                <input
-                                    type="text"
-                                    value={aiModel}
-                                    onChange={(e) => setAiModel(e.target.value)}
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                                    placeholder="gemini-2.0-flash"
-                                />
-                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                    Modèles conseillés : gemini-2.0-flash (rapide), gemini-2.5-pro (puissant), gemini-3-flash (nouveau).
-                                </p>
-                            </div>
-                            <div className="mb-4">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                    Instructions pour l'analyse
-                                </label>
-                                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                                    Décrivez ce que l'IA doit faire avec le texte (ex: résumer, extraire des tâches, corriger...)
-                                </p>
-                                <textarea
-                                    value={aiInstructions}
-                                    onChange={(e) => setAiInstructions(e.target.value)}
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent h-32 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                                    placeholder="Entrez vos instructions ici..."
-                                />
-                            </div>
+            <SuccessModal
+                show={showSuccessModal}
+                onClose={() => setShowSuccessModal(false)}
+            />
 
-                            {/* PDF Configuration */}
-                            <div className="mb-6 pt-4 border-t border-gray-100 dark:border-gray-700">
-                                <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
-                                    <FileText className="w-4 h-4 text-purple-500" />
-                                    Paramètres PDF
-                                </h3>
-                                <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/30 p-3 rounded-lg border border-gray-100 dark:border-gray-700">
-                                    <div className="flex flex-col">
-                                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Justifier le texte</span>
-                                        <span className="text-[10px] text-gray-500">Aligne le texte uniformément à gauche et à droite</span>
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            className="sr-only peer"
-                                            checked={pdfJustify}
-                                            onChange={(e) => setPdfJustify(e.target.checked)}
-                                        />
-                                        <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 dark:peer-focus:ring-purple-900 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div className="flex justify-end gap-2">
-                                <button
-                                    onClick={() => setShowSettings(false)}
-                                    className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                                >
-                                    Annuler
-                                </button>
-                                <button
-                                    onClick={() => setShowSettings(false)}
-                                    className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-                                >
-                                    Enregistrer
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )
-            }
-
-            {/* Success Modal */}
-            {
-                showSuccessModal && (
-                    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
-                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8 max-w-sm w-full text-center border border-green-100 dark:border-green-900 transform scale-100 transition-all">
-                            <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-green-600 dark:text-green-400"><path d="M20 6 9 17l-5-5" /></svg>
-                            </div>
-                            <h2 className="text-2xl font-bold mb-2 text-gray-800 dark:text-white">Sauvegarde réussie !</h2>
-                            <p className="text-gray-600 dark:text-gray-300 mb-6">
-                                Tous les fichiers ont été générés et téléchargés avec succès.
-                            </p>
-                            <div className="space-y-2 text-sm text-gray-500 dark:text-gray-400 mb-6 bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg text-left">
-                                <div className="flex items-center gap-2">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
-                                    Transcription (PDF)
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
-                                    Texte brut (.txt)
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500"><path d="M20 6 9 17l-5-5" /></svg>
-                                    Audio (.webm)
-                                </div>
-                            </div>
-                            <button
-                                onClick={() => setShowSuccessModal(false)}
-                                className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors shadow-lg hover:shadow-xl"
-                            >
-                                Fermer
-                            </button>
-                        </div>
-                    </div>
-                )
-            }
-
-            {/* Email Transfer Modal - Assistant Workflow */}
-            {
-                showEmailModal && (
-                    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-300">
-                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-md w-full border border-purple-100 dark:border-purple-900/30">
-                            <div className="flex items-center gap-3 mb-4">
-                                <div className="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center">
-                                    <Mail className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                                </div>
-                                <h2 className="text-xl font-bold text-gray-800 dark:text-white">Assistant de Transfert Email</h2>
-                            </div>
-
-                            <div className="space-y-6">
-                                {/* Step 1: Download */}
-                                <div className={`p-4 rounded-xl border-2 transition-all ${hasDownloadedPDF ? 'bg-green-50/50 border-green-200 dark:bg-green-900/10 dark:border-green-800/50' : 'bg-purple-50/50 border-purple-200 dark:bg-purple-900/10 dark:border-purple-800/50'}`}>
-                                    <div className="flex items-center justify-between mb-3">
-                                        <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${hasDownloadedPDF ? 'bg-green-500 text-white' : 'bg-purple-600 text-white'}`}>1</span>
-                                            Télécharger le PDF
-                                        </h3>
-                                        {hasDownloadedPDF && (
-                                            <span className="text-xs font-bold text-green-600 dark:text-green-400 flex items-center gap-1">
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                                                Prêt !
-                                            </span>
-                                        )}
-                                    </div>
-                                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                                        Le fichier doit être sur votre appareil pour l'attacher à votre e-mail.
-                                    </p>
-                                    <button
-                                        onClick={() => { downloadPDF(); setHasDownloadedPDF(true); }}
-                                        className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all ${hasDownloadedPDF ? 'bg-white dark:bg-gray-800 text-green-600 border border-green-200 dark:border-green-800' : 'bg-purple-600 text-white hover:bg-purple-700 shadow-md'}`}
-                                    >
-                                        <FileText className="w-5 h-5" />
-                                        {hasDownloadedPDF ? 'Télécharger à nouveau' : 'Télécharger le PDF maintenant'}
-                                    </button>
-                                </div>
-
-                                {/* Step 2: Prepare Email */}
-                                <div className={`p-4 rounded-xl border-2 transition-all ${hasDownloadedPDF ? 'bg-blue-50/50 border-blue-200 dark:bg-blue-900/10 dark:border-blue-800/50 opacity-100' : 'bg-gray-50 border-gray-100 dark:bg-gray-900/10 dark:border-gray-800/50 opacity-60'}`}>
-                                    <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2 mb-4">
-                                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${hasDownloadedPDF ? 'bg-blue-600 text-white' : 'bg-gray-400 text-white'}`}>2</span>
-                                        Ouvrir votre Messagerie
-                                    </h3>
-
-                                    <div className="space-y-3">
-                                        <input
-                                            type="email"
-                                            value={emailRecipient}
-                                            onChange={(e) => setEmailRecipient(e.target.value)}
-                                            placeholder="Destinataire (optionnel)"
-                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                                        />
-                                        <input
-                                            type="text"
-                                            value={emailSubject}
-                                            onChange={(e) => setEmailSubject(e.target.value)}
-                                            placeholder="Objet de l'e-mail"
-                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                                        />
-                                    </div>
-
-                                    <div className="mt-4 p-3 bg-white/50 dark:bg-black/20 rounded-lg border border-blue-100 dark:border-blue-900/30">
-                                        <p className="text-[11px] text-blue-700 dark:text-blue-300 flex items-start gap-2 leading-tight">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
-                                            Une fois la messagerie ouverte, cliquez sur l'icône trombone (pièce jointe) et sélectionnez le PDF qui vient d'être téléchargé.
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="flex justify-between items-center mt-8">
-                                <button
-                                    onClick={() => setShowEmailModal(false)}
-                                    className="px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm"
-                                >
-                                    Fermer
-                                </button>
-                                <button
-                                    onClick={sendEmail}
-                                    disabled={!hasDownloadedPDF}
-                                    className={`px-6 py-2 rounded-lg transition-all font-bold flex items-center gap-2 ${hasDownloadedPDF ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg scale-105' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
-                                >
-                                    <Mail className="w-5 h-5" />
-                                    {hasDownloadedPDF ? 'Ouvrir Messagerie' : 'Télécharger PDF d\'abord'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )
-            }
-
+            <EmailModal
+                show={showEmailModal}
+                onClose={() => setShowEmailModal(false)}
+                emailRecipient={emailRecipient}
+                setEmailRecipient={setEmailRecipient}
+                emailSubject={emailSubject}
+                setEmailSubject={setEmailSubject}
+                hasDownloadedPDF={hasDownloadedPDF}
+                onDownloadPDF={downloadPDF}
+                onSendEmail={sendEmail}
+            />
 
             {/* Copyright Footer */}
             <div className="text-center mt-8 pb-4">
