@@ -8,8 +8,10 @@ Une plateforme web de pointe pour la transcription, la traduction et l'analyse i
 ## ✨ Fonctionnalités Avancées
 
 ### 🚀 Modes de Transcription Hybrides
-- **Mode Live (Rapide)** : Utilise l'API Web Speech native pour une transcription instantanée à l'écran. Idéal pour les prises de notes rapides.
-- **Mode Post (Précis)** : Utilise **Gemini 2.0 Flash** pour transcrire directement des fichiers audio enregistrés. Offre une précision chirurgicale et une meilleure gestion de la ponctuation.
+- **Google Gemini (Cloud)** : Utilise **Gemini 2.0 Flash** pour une transcription ultra-rapide et précise via le cloud. (Activé par défaut)
+- **Whisper (Local)** : Transcription privée et hors-ligne utilisant le modèle **OpenAI Whisper** via un serveur local Python.
+    - *Avantages* : Confidentialité totale, pas de coût API.
+    - *Prérequis* : Serveur Python (inclus) doit être lancé.
 
 ### 🤖 Intelligence Artificielle "Encounter"
 - **Analyse Automatique** : Système de correction intelligent intégré (Orthographe, syntaxe, suppression des espaces/sauts de ligne inutiles).
@@ -18,30 +20,32 @@ Une plateforme web de pointe pour la transcription, la traduction et l'analyse i
 
 ### ⏱️ Automatisation & Sécurité
 - **Support Multilingue Complet** : Transcription et traduction supportant les scripts complexes, dont l'**Arabe** avec gestion intelligente du Right-to-Left (RTL).
-- **Arrêt Automatique sur Silence** : Détecte les pauses de 15 secondes et déclenche automatiquement l'arrêt de l'enregistrement.
-- **Flux de Sauvegarde Automatique** : En un seul clic (ou automatiquement), génère et télécharge :
-  - Un rapport **PDF "Encounter"** : Mise en page professionnelle avec support **BiDi** (plus d'inversion des mots latins dans les textes arabes).
-  - Un fichier **Texte Brut (.txt)**.
-  - Un document **Word (.docx)** (Mise en page éditable).
-  - L'enregistrement **Audio Haute Qualité (.webm)**.
-- **Historique Local** : Stockage sécurisé de vos sessions directement dans votre navigateur.
+- **Exports Professionnels** :
+  - **PDF Justifié** : Rapports PDF avec support complet de l'arabe et options de justification.
+  - **Email Assistant** : Workflow intégré pour préparer et envoyer vos rapports par email.
+  - **Word & TXT** : Formats éditables pour une flexibilité maximale.
+- **Arrêt Automatique sur Silence** : Détecte les pauses de 15 secondes et arrête l'enregistrement.
+- **Historique Local** : Stockage sécurisé de vos sessions dans le navigateur.
 
 ### 📊 Interface de Contrôle Premium
-- **VU-mètre en Temps Réel** : Visualisez l'intensité du signal micro grâce à une barre de niveau LED dynamique.
-- **Capture Multi-Sources** : Choix entre le microphone seul ou le mix Microphone + Audio Système.
-- **Design Adaptatif** : Interface moderne "Glassmorphism" compatible avec le Mode Sombre (Dark Mode) et parfaitement optimisée pour mobile.
+- **VU-mètre en Temps Réel** : Visualisez l'intensité du signal micro.
+- **Token Counter** : Suivez votre consommation de tokens Gemini.
+- **Design Adaptatif** : Interface "Glassmorphism" avec Mode Sombre/Clair automatique.
 
 ## 🚀 Installation & Déploiement
 
 ### Prérequis
-- Node.js 18+
-- Clé API Google Gemini ([ai.google.dev](https://ai.google.dev/))
+- **Node.js 18+**
+- **Clé API Google Gemini** ([ai.google.dev](https://ai.google.dev/))
+- **Python 3.8+** (Uniquement pour le mode Whisper Local)
 
 ### Installation rapide
+
+#### 1. Application Web (React)
 ```bash
 # Installation
-git clone https://github.com/votre-compte/my-encounter.git
-cd my-encounter
+git clone https://github.com/votre-compte/speech-to-text.git
+cd speech-to-text
 npm install
 
 # Configuration (.env)
@@ -51,12 +55,22 @@ VITE_GEMINI_API_KEY=votre_cle_ici
 npm run dev
 ```
 
-### Déploiement (Vite / Netlify / GitHub Pages)
-L'application utilise des chemins relatifs (`base: './'`), ce qui la rend portable sur n'importe quel service de déploiement sans configuration supplémentaire des chemins.
+#### 2. Serveur Whisper (Optionnel - Pour mode Local)
+Si vous souhaitez utiliser la transcription locale :
+
+```bash
+# Installation des dépendances Python
+pip install flask flask-cors faster-whisper
+
+# Lancement du serveur (Port 5000)
+python whisper_server.py
+```
+*Note : Le serveur doit rester ouvert pendant l'utilisation du mode Local.*
+
+### Déploiement
+L'application est prête pour **Netlify**, **Vercel** ou **GitHub Pages**.
+Pour la production, le mode Cloud (Gemini) est recommandé car il ne nécessite pas de backend Python.
 
 ## 📄 Licence & Crédits
 Copyright © Michel ESPARSA - 2026.
-Version : __APP_VERSION__
-
----
 Développé avec ❤️ pour une expérience de transcription ultime.
