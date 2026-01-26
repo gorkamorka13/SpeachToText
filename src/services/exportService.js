@@ -18,7 +18,7 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
     doc.addFileToVFS('Amiri-Regular.ttf', amiriFont);
     doc.addFont('Amiri-Regular.ttf', 'Amiri', 'normal');
 
-    doc.setFontSize(11);
+    doc.setFontSize(9);
     doc.setTextColor(0, 0, 0);
     doc.setFont("helvetica", "normal");
 
@@ -50,7 +50,7 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
 
     const writeParagraphs = (text, x, y, width, align = 'left') => {
         const paragraphs = text.split('\n');
-        const innerLineHeight = 6;
+        const innerLineHeight = 5;
         let currentY = y;
 
         for (let p = 0; p < paragraphs.length; p++) {
@@ -85,12 +85,12 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
     };
 
     if (aiResult) {
-        doc.setFontSize(14);
+        doc.setFontSize(12);
         doc.setFont("helvetica", "bold");
         doc.text("Encounter", margin, yPosition);
         yPosition += 7;
         if (customFilename) {
-            doc.setFontSize(10);
+            doc.setFontSize(8);
             doc.setFont("helvetica", "italic");
             doc.setTextColor(100);
             doc.text(`Fichier : ${customFilename}`, margin, yPosition);
@@ -98,7 +98,7 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
         } else {
             yPosition += 3;
         }
-        doc.setFontSize(11);
+        doc.setFontSize(10);
         doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "normal");
         yPosition = writeParagraphs(aiResult, margin, yPosition, availableWidth, 'left');
@@ -116,7 +116,7 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
             const originalParagraphs = transcript.split('\n');
             const translatedParagraphs = translatedTranscript.split('\n');
             const maxPara = Math.max(originalParagraphs.length, translatedParagraphs.length);
-            const lineHeight = 5;
+            const lineHeight = 4;
 
             for (let i = 0; i < maxPara; i++) {
                 const origPara = originalParagraphs[i] || "";
@@ -181,7 +181,7 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
     const currentDate = new Date().toLocaleDateString('fr-FR');
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
-        doc.setFontSize(10);
+        doc.setFontSize(8);
         doc.setTextColor(150);
         const footerText = `Page ${i} / ${totalPages} - ${currentDate}`;
         doc.text(footerText, pageWidth / 2, pageHeight - 10, { align: 'center' });
