@@ -22,6 +22,32 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
     doc.setTextColor(0, 0, 0);
     doc.setFont("helvetica", "normal");
 
+    const writeTextLine = (text, x, y, width, align, isJustify, isArabic) => {
+        if (isArabic) {
+            const line = prepareRTLText(text);
+            doc.text(line, x + width, y, { align: 'right' });
+            return;
+        }
+
+        if (isJustify) {
+            const words = text.trim().split(/\s+/);
+            if (words.length > 1) {
+                const totalWordsWidth = words.reduce((sum, word) => sum + doc.getTextWidth(word), 0);
+                const totalSpaceToFill = width - totalWordsWidth;
+                const individualSpaceWidth = totalSpaceToFill / (words.length - 1);
+
+                let currentX = x;
+                words.forEach((word, i) => {
+                    doc.text(word, currentX, y);
+                    currentX += doc.getTextWidth(word) + individualSpaceWidth;
+                });
+                return;
+            }
+        }
+
+        doc.text(text, x, y, { align });
+    };
+
     const writeParagraphs = (text, x, y, width, align = 'left') => {
         const paragraphs = text.split('\n');
         const innerLineHeight = 6;
@@ -47,22 +73,10 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
                     doc.setFont(isArabic ? "Amiri" : "helvetica", "normal");
                 }
 
-                let line = lines[i];
-                let currentAlign = align;
-                let currentX = x;
-
-                if (isArabic) {
-                    line = prepareRTLText(line);
-                    currentAlign = 'right';
-                    currentX = x + width;
-                }
-
                 const isLastLine = i === lines.length - 1;
-                const options = (pdfJustify && !isLastLine && !isArabic)
-                    ? { align: 'justify', maxWidth: width }
-                    : { align: currentAlign };
+                const isJustify = pdfJustify && !isLastLine && !isArabic;
 
-                doc.text(line, currentX, currentY, options);
+                writeTextLine(lines[i], x, currentY, width, align, isJustify, isArabic);
                 currentY += innerLineHeight;
             }
             currentY += 2;
@@ -143,32 +157,16 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
 
                     if (j < splitOrig.length) {
                         doc.setFont(isArabicOrig ? "Amiri" : "helvetica", "normal");
-                        let line = splitOrig[j];
-                        let xPos = margin;
-                        let align = 'left';
-                        if (isArabicOrig) {
-                            line = prepareRTLText(line);
-                            xPos = margin + colWidth;
-                            align = 'right';
-                        }
                         const isLastLine = j === splitOrig.length - 1;
-                        const options = (pdfJustify && !isLastLine && !isArabicOrig) ? { align: 'justify', maxWidth: colWidth } : { align };
-                        doc.text(line, xPos, yPosition, options);
+                        const isJustify = pdfJustify && !isLastLine && !isArabicOrig;
+                        writeTextLine(splitOrig[j], margin, yPosition, colWidth, 'left', isJustify, isArabicOrig);
                     }
 
                     if (j < splitTrans.length) {
                         doc.setFont(isArabicTrans ? "Amiri" : "helvetica", "normal");
-                        let line = splitTrans[j];
-                        let xPos = margin + colWidth + colGap;
-                        let align = 'left';
-                        if (isArabicTrans) {
-                            line = prepareRTLText(line);
-                            xPos = margin + colWidth + colGap + colWidth;
-                            align = 'right';
-                        }
                         const isLastLine = j === splitTrans.length - 1;
-                        const options = (pdfJustify && !isLastLine && !isArabicTrans) ? { align: 'justify', maxWidth: colWidth } : { align };
-                        doc.text(line, xPos, yPosition, options);
+                        const isJustify = pdfJustify && !isLastLine && !isArabicTrans;
+                        writeTextLine(splitTrans[j], margin + colWidth + colGap, yPosition, colWidth, 'left', isJustify, isArabicTrans);
                     }
                     yPosition += lineHeight;
                 }

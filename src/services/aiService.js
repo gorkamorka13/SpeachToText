@@ -17,9 +17,7 @@ export const callGemini = async (modelName, contents, maxRetries = 3) => {
     });
 
     const sizeMo = (totalBinarySize / 1024 / 1024).toFixed(1);
-    if (totalBinarySize > 20 * 1024 * 1024) {
-        throw new Error(`Fichier trop volumineux (${sizeMo} Mo). La limite Gemini est de 20 Mo. Veuillez utiliser Whisper ou un enregistrement plus court.`);
-    }
+    console.log(`[Gemini] Taille de la charge utile : ${sizeMo} Mo`);
 
     let attempt = 0;
     while (attempt <= maxRetries) {
@@ -141,12 +139,18 @@ export const fileToGenerativePart = async (blob) => {
             throw new Error("Résultat btoa vide.");
         }
 
-        console.log(`[Base64] Succès: ${base64Data.length} caractères générés`);
+        let finalMime = (blob.type || "audio/wav").split(';')[0];
+        // Normalize video/webm to audio/webm if it's just an audio stream
+        if (finalMime === 'video/webm' || finalMime === 'video/x-matroska') {
+            finalMime = 'audio/webm';
+        }
+
+        console.log(`[Base64] Succès: ${base64Data.length} caractères, MIME=${finalMime}`);
 
         return {
             inlineData: {
                 data: base64Data,
-                mimeType: (blob.type || "audio/wav").split(';')[0]
+                mimeType: finalMime
             }
         };
     } catch (e) {
