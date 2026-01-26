@@ -137,7 +137,9 @@ export default function SpeechToTextApp() {
         const resize = (ref) => {
             if (ref.current) {
                 ref.current.style.height = 'auto';
-                ref.current.style.height = `${ref.current.scrollHeight}px`;
+                // Cap height at roughly 10 lines (~260px)
+                const newHeight = Math.min(ref.current.scrollHeight, 260);
+                ref.current.style.height = `${newHeight}px`;
             }
         };
         resize(transcriptTextareaRef);
@@ -1220,10 +1222,10 @@ Texte à analyser :
                             )}
                         </div>
 
-                        <div className="flex flex-wrap gap-3 items-center justify-between w-full">
-                            {/* Drag & Drop Zone */}
+                        {/* Drag & Drop Zone - Own Row */}
+                        <div className="w-full mb-4">
                             <div
-                                className={`flex-1 w-full p-4 border-2 border-dashed rounded-xl transition-all flex flex-col items-center justify-center gap-2 cursor-pointer ${isDragging
+                                className={`w-full p-4 border-2 border-dashed rounded-xl transition-all flex flex-col items-center justify-center gap-2 cursor-pointer ${isDragging
                                     ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
                                     : 'border-gray-200 dark:border-gray-700 hover:border-purple-300 dark:hover:border-purple-700 bg-gray-50/50 dark:bg-gray-800/50'
                                     }`}
@@ -1240,12 +1242,13 @@ Texte à analyser :
                                     className="hidden"
                                 />
                                 {uploadedFile ? (
-                                    <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400">
-                                        <FileAudio className="w-5 h-5" />
-                                        <span className="text-sm font-medium truncate max-w-[200px]">{uploadedFile.name}</span>
+                                    <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400 w-full justify-center">
+                                        <FileAudio className="w-5 h-5 flex-shrink-0" />
+                                        <span className="text-sm font-medium break-all text-center">{uploadedFile.name}</span>
                                         <button
                                             onClick={(e) => { e.stopPropagation(); setUploadedFile(null); setAudioBlob(null); }}
-                                            className="p-1 hover:bg-purple-100 dark:hover:bg-purple-900/40 rounded-full"
+                                            className="p-1 hover:bg-purple-100 dark:hover:bg-purple-900/40 rounded-full flex-shrink-0"
+                                            title="Supprimer le fichier"
                                         >
                                             <Trash2 className="w-4 h-4 text-red-500" />
                                         </button>
@@ -1260,7 +1263,9 @@ Texte à analyser :
                                     </>
                                 )}
                             </div>
+                        </div>
 
+                        <div className="flex flex-wrap gap-3 items-center justify-between w-full">
                             {/* Mode Toggle */}
                             <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg self-start sm:self-auto">
                                 <button
@@ -1315,10 +1320,14 @@ Texte à analyser :
 
                             <button
                                 onClick={toggleListening}
+                                disabled={!!uploadedFile}
+                                title={uploadedFile ? "Impossible d'enregistrer avec un fichier chargé. Supprimez d'abord le fichier." : "Commencer l'enregistrement"}
                                 className={`px-6 sm:px-8 py-3 rounded-lg font-semibold text-white transition-all duration-200 flex items-center gap-2 justify-center flex-1 sm:flex-initial ${isListening
                                     ? 'bg-red-500 hover:bg-red-600 animate-pulse'
-                                    : 'bg-purple-600 hover:bg-purple-700'
-                                    }`}
+                                    : uploadedFile
+                                        ? 'bg-gray-400 cursor-not-allowed'
+                                        : 'bg-purple-600 hover:bg-purple-700'
+                                    } ${uploadedFile ? 'opacity-50' : ''}`}
                             >
                                 {isListening ? (
                                     <>
@@ -1435,7 +1444,7 @@ Texte à analyser :
                             </div>
                             <div
                                 ref={transcriptContainerRef}
-                                className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 min-h-[80px] h-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300 ${isListening ? 'ring-2 ring-purple-100 dark:ring-purple-900 overflow-y-auto h-64' : ''}`}
+                                className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 min-h-[80px] h-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300 ${isListening ? `ring-2 ring-purple-100 dark:ring-purple-900 h-64 ${(transcript || interimTranscript) ? 'overflow-y-auto' : 'overflow-hidden'}` : ''}`}
                             >
                                 {isListening && (
                                     <div className="flex items-center gap-2 mb-4 text-red-500 sticky top-0 bg-gray-50 pb-2">
@@ -1462,7 +1471,7 @@ Texte à analyser :
                                     ) : (
                                         <textarea
                                             ref={transcriptTextareaRef}
-                                            className="w-full bg-gray-50/50 dark:bg-gray-900/30 p-3 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-700 dark:text-gray-300 leading-relaxed font-sans text-base transition-all overflow-hidden"
+                                            className={`w-full bg-gray-50/50 dark:bg-gray-900/30 p-3 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-700 dark:text-gray-300 leading-relaxed font-sans text-base transition-all max-h-[260px] ${transcript ? 'overflow-y-auto' : 'overflow-hidden'}`}
                                             value={transcript}
                                             onChange={(e) => setTranscript(e.target.value)}
                                             placeholder="Le texte apparaîtra ici..."
@@ -1507,7 +1516,7 @@ Texte à analyser :
                                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 min-h-[80px] h-auto border border-gray-100 dark:border-gray-700 relative transition-all duration-300">
                                     <div
                                         ref={translationAreaRef}
-                                        className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-sans text-base"
+                                        className={`text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-sans text-base max-h-[260px] ${translatedTranscript ? 'overflow-y-auto' : 'overflow-hidden'}`}
                                     >
                                         {translatedTranscript || <span className="text-gray-400 italic">La traduction apparaîtra ici...</span>}
                                     </div>
@@ -1599,7 +1608,7 @@ Texte à analyser :
                                         ref={aiTextareaRef}
                                         value={aiResult}
                                         onChange={(e) => setAiResult(e.target.value)}
-                                        className="w-full bg-white/50 dark:bg-gray-800/50 p-3 border border-purple-200/50 dark:border-purple-800/50 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed font-mono text-sm transition-all overflow-hidden"
+                                        className={`w-full bg-white/50 dark:bg-gray-800/50 p-3 border border-purple-200/50 dark:border-purple-800/50 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed font-mono text-sm transition-all max-h-[260px] ${aiResult ? 'overflow-y-auto' : 'overflow-hidden'}`}
                                         placeholder="Le résultat s'affichera ici..."
                                         rows={1}
                                     />

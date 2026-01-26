@@ -8,24 +8,24 @@ Une plateforme web de pointe pour la transcription, la traduction et l'analyse i
 ## ✨ Fonctionnalités Avancées
 
 ### 🚀 Modes de Transcription Hybrides
-- **Google Gemini (Cloud)** : Utilise **Gemini 2.0 Flash** pour une transcription ultra-rapide et précise via le cloud. (Activé par défaut)
+- **Google Gemini (Cloud)** : Utilise **Gemini 2.0 Flash** pour une transcription ultra-rapide et précise via le cloud.
+    - *Support Large* : Gère désormais les fichiers ultra-volumineux jusqu'à **389 Mo** (et plus) grâce à un système de conversion par segments (chunking).
+    - *Compatibilité WebM* : Normalisation automatique des flux `video/webm` en `audio/webm` pour une acceptation sans erreur par l'IA.
 - **Whisper (Local)** : Transcription privée et hors-ligne utilisant le modèle **OpenAI Whisper** via un serveur local Python.
-    - *Avantages* : Confidentialité totale, pas de coût API.
-    - *Prérequis* : Serveur Python (inclus) doit être lancé.
+    - *Avantages* : Confidentialité totale, pas de coût API, supporte les fichiers sans limite de taille.
 
 ### 🤖 Intelligence Artificielle "Encounter"
-- **Analyse Automatique** : Système de correction intelligent intégré (Orthographe, syntaxe, suppression des espaces/sauts de ligne inutiles).
-- **Mise en forme intelligente** : Identification automatique des paragraphes et structuration du texte.
-- **Agent Personnalisable** : Modifiez les instructions de l'IA et le modèle utilisé (Gemini 2.0, 2.5, etc.) directement dans les paramètres.
+- **Analyse Automatique** : Système de correction intelligent intégré (Orthographe, syntaxe, restructuration).
+- **Mise en forme intelligente** : Identification automatique des paragraphes et des points clés.
+- **Agent Personnalisable** : Modifiez les instructions et le modèle (Flash, Pro) directement dans l'interface.
 
-### ⏱️ Automatisation & Sécurité
-- **Support Multilingue Complet** : Transcription et traduction supportant les scripts complexes, dont l'**Arabe** avec gestion intelligente du Right-to-Left (RTL).
-- **Exports Professionnels** :
-  - **PDF Justifié** : Rapports PDF avec support complet de l'arabe et options de justification.
-  - **Email Assistant** : Workflow intégré pour préparer et envoyer vos rapports par email.
-  - **Word & TXT** : Formats éditables pour une flexibilité maximale.
-- **Arrêt Automatique sur Silence** : Détecte les pauses de 15 secondes et arrête l'enregistrement.
-- **Historique Local** : Stockage sécurisé de vos sessions dans le navigateur.
+### ⏱️ Automatisation & Exports
+- **Nommage Personnalisé** : Nouveau champ "Nom du fichier" pour personnaliser vos exports TXT, PDF, Word et Audio.
+- **PDF Professionnel** :
+  - **Justification Réelle** : Algorithme de justification sur-mesure pour un rendu parfait (support colonnes & multilingue).
+  - **Support RTL** : Gestion avancée de l'Arabe et des écritures de droite à gauche.
+- **Persistance des Réglages** : Vos choix (langue, moteur, modèle, URL Whisper) sont sauvegardés localement.
+- **Arrêt Automatique sur Silence** : Détection des pauses prolongées (15s) pour stopper et sauvegarder.
 
 ### 📊 Interface de Contrôle Premium
 - **VU-mètre en Temps Réel** : Visualisez l'intensité du signal micro.
