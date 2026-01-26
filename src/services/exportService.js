@@ -5,7 +5,7 @@ import { amiriFont } from '../AmiriFont';
 import ArabicReshaper from 'arabic-reshaper';
 import { prepareRTLText } from '../utils/arabicUtils';
 
-export const generatePDF = ({ transcript, aiResult, translatedTranscript, enableTranslation, targetLanguage, pdfJustify }) => {
+export const generatePDF = ({ transcript, aiResult, translatedTranscript, enableTranslation, targetLanguage, pdfJustify, customFilename }) => {
     if (!transcript && !aiResult) return null;
 
     const doc = new jsPDF();
@@ -74,8 +74,19 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
         doc.setFontSize(14);
         doc.setFont("helvetica", "bold");
         doc.text("Encounter", margin, yPosition);
-        yPosition += 10;
+        yPosition += 7;
+        if (customFilename) {
+            doc.setFontSize(10);
+            doc.setFont("helvetica", "italic");
+            doc.setTextColor(100);
+            doc.text(`Fichier : ${customFilename}`, margin, yPosition);
+            yPosition += 8;
+        } else {
+            yPosition += 3;
+        }
         doc.setFontSize(11);
+        doc.setTextColor(0, 0, 0);
+        doc.setFont("helvetica", "normal");
         yPosition = writeParagraphs(aiResult, margin, yPosition, availableWidth, 'left');
     } else {
         if (enableTranslation && translatedTranscript) {
@@ -181,7 +192,7 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
     return doc;
 };
 
-export const downloadDOCX = async ({ transcript, aiResult, translatedTranscript, enableTranslation, targetLanguage, aiModel, pdfJustify }) => {
+export const downloadDOCX = async ({ transcript, aiResult, translatedTranscript, enableTranslation, targetLanguage, aiModel, pdfJustify, customFilename }) => {
     if (!transcript && !aiResult) return;
 
     const children = [];
@@ -242,5 +253,8 @@ export const downloadDOCX = async ({ transcript, aiResult, translatedTranscript,
     });
 
     const blob = await Packer.toBlob(doc);
-    saveAs(blob, `encounter-report-${new Date().toISOString().slice(0, 10)}.docx`);
+    const fileName = customFilename
+        ? `${customFilename}.docx`
+        : `encounter-report-${new Date().toISOString().slice(0, 10)}.docx`;
+    saveAs(blob, fileName);
 };

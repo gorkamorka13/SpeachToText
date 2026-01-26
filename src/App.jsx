@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Copy, Download, Save, Trash2, Mic, StopCircle, RefreshCw, FileAudio, Settings, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun } from 'lucide-react';
+import { Copy, Download, Save, Trash2, Mic, StopCircle, RefreshCw, FileAudio, Settings, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun, X } from 'lucide-react';
 
 // Components
 import LanguageSelector from './components/LanguageSelector';
@@ -61,6 +61,7 @@ export default function SpeechToTextApp() {
     const [darkMode, setDarkMode] = useState(() => {
         return localStorage.getItem('darkMode') === 'true';
     });
+    const [customFilename, setCustomFilename] = useState('');
     const [audioBlob, setAudioBlob] = useState(null);
     const [autoStopSilence, setAutoStopSilence] = useState(true);
     const [silenceCountdown, setSilenceCountdown] = useState(15);
@@ -247,14 +248,35 @@ export default function SpeechToTextApp() {
     // Save app settings to localStorage
     useEffect(() => {
         localStorage.setItem('aiInstructions', aiInstructions);
+    }, [aiInstructions]);
+
+    useEffect(() => {
         localStorage.setItem('aiModel', aiModel);
-        localStorage.setItem('enableTranslation', enableTranslation);
-        localStorage.setItem('language', language);
-        localStorage.setItem('targetLanguage', targetLanguage);
-        localStorage.setItem('enableSystemAudio', enableSystemAudio);
+    }, [aiModel]);
+
+    useEffect(() => {
         localStorage.setItem('transcriptionEngine', transcriptionEngine);
+    }, [transcriptionEngine]);
+
+    useEffect(() => {
         localStorage.setItem('whisperUrl', whisperUrl);
-    }, [aiInstructions, aiModel, enableTranslation, language, targetLanguage, enableSystemAudio, transcriptionEngine, whisperUrl]);
+    }, [whisperUrl]);
+
+    useEffect(() => {
+        localStorage.setItem('enableTranslation', enableTranslation);
+    }, [enableTranslation]);
+
+    useEffect(() => {
+        localStorage.setItem('language', language);
+    }, [language]);
+
+    useEffect(() => {
+        localStorage.setItem('targetLanguage', targetLanguage);
+    }, [targetLanguage]);
+
+    useEffect(() => {
+        localStorage.setItem('enableSystemAudio', enableSystemAudio);
+    }, [enableSystemAudio]);
 
     // Auto-scroll Transcript
     useEffect(() => {
@@ -337,8 +359,9 @@ export default function SpeechToTextApp() {
     const transcribePostProcess = async (directBlob = null) => {
         const blobToUse = (directBlob instanceof Blob) ? directBlob : audioBlob;
 
-        if (!blobToUse) {
-            logError("Aucun fichier audio à transcrire.");
+        if (!blobToUse || blobToUse.size === 0) {
+            logError("Le fichier audio est vide ou n'a pas pu être capturé.", "Transcription");
+            showNotification("Audio vide ou invalide.");
             return;
         }
 
@@ -354,14 +377,19 @@ export default function SpeechToTextApp() {
             } else {
                 showNotification("Transcription cloud (Gemini) en cours...");
 
-                // Convert WebM to WAV for Gemini compatibility
+                // Convert WebM to WAV for Gemini compatibility if needed
                 let processedBlob = blobToUse;
-                if (blobToUse.type.includes('webm')) {
+                // Skip silence trimming for large files (> 20MB) to avoid memory crashes
+                if (blobToUse.type.includes('webm') && blobToUse.size < 20 * 1024 * 1024) {
                     try {
                         processedBlob = await trimSilence(blobToUse);
                     } catch (e) {
                         console.error("Audio conversion failed, trying raw:", e);
+                        logError(e, "Audio Conversion");
+                        // Continue with original blob if conversion fails
                     }
+                } else if (blobToUse.size >= 20 * 1024 * 1024) {
+                    console.log("[Transcription] Fichier volumineux détecté, saut du traitement du silence pour économiser la mémoire.");
                 }
 
                 const audioPart = await fileToGenerativePart(processedBlob);
@@ -402,13 +430,20 @@ export default function SpeechToTextApp() {
                         finalizeAutoSave(null);
                     }
                 }
-            } else {
-                throw new Error("Réponse de transcription vide.");
             }
         } catch (error) {
-            console.error("Transcription Error:", error);
-            logError(error, "Transcription");
-            showNotification("Erreur lors de la transcription: " + error.message);
+            console.error("Transcription Error Detail:", error);
+            const blobInfo = blobToUse ? `[${blobToUse.type}, ${blobToUse.size} octets]` : "[Pas de blob]";
+            logError(`${error.message} ${blobInfo}`, "Transcription");
+
+            let userMsg = "Erreur de transcription : " + error.message;
+            if (error.message.includes('inlineData')) {
+                userMsg = "L'IA n'a pas reçu de données audio valides. Réessayez l'enregistrement.";
+            } else if (error.message.includes('base64')) {
+                userMsg = "Échec technique de conversion audio. Essayez un autre fichier ou navigateur.";
+            }
+
+            showNotification(userMsg);
             if (isAutoSavingRef.current) {
                 finalizeAutoSave(null);
             }
@@ -917,7 +952,10 @@ Texte à analyser :
         const element = document.createElement('a');
         const file = new Blob([textToSave], { type: 'text/plain' });
         element.href = URL.createObjectURL(file);
-        element.download = `transcription-${new Date().toISOString().slice(0, 10)}.txt`;
+        const fileName = customFilename.trim()
+            ? `${customFilename.trim()}.txt`
+            : `transcription-${new Date().toISOString().slice(0, 10)}.txt`;
+        element.download = fileName;
         document.body.appendChild(element);
         element.click();
         document.body.removeChild(element);
@@ -933,7 +971,10 @@ Texte à analyser :
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;
-        a.download = `recording-${new Date().toISOString().slice(0, 10)}.webm`;
+        const fileName = customFilename.trim()
+            ? `${customFilename.trim()}.webm`
+            : `recording-${new Date().toISOString().slice(0, 10)}.webm`;
+        a.download = fileName;
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
@@ -948,11 +989,15 @@ Texte à analyser :
             translatedTranscript: translatedTranscriptRef.current,
             enableTranslation,
             targetLanguage,
-            pdfJustify
+            pdfJustify,
+            customFilename: customFilename.trim()
         });
 
         if (doc) {
-            doc.save(`transcription-${new Date().toISOString().slice(0, 10)}.pdf`);
+            const fileName = customFilename.trim()
+                ? `${customFilename.trim()}.pdf`
+                : `transcription-${new Date().toISOString().slice(0, 10)}.pdf`;
+            doc.save(fileName);
             showNotification("Fichier PDF téléchargé !");
             setHasDownloadedPDF(true);
         }
@@ -966,7 +1011,8 @@ Texte à analyser :
             enableTranslation,
             targetLanguage,
             aiModel,
-            pdfJustify
+            pdfJustify,
+            customFilename: customFilename.trim()
         });
         showNotification("Fichier Word téléchargé !");
     };
@@ -1074,15 +1120,15 @@ Texte à analyser :
                     )}
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                         <div className="flex items-center gap-12 w-full sm:w-auto">
-                            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800 dark:text-white flex items-center gap-2 sm:gap-3">
-                                <Mic className="w-6 h-6 sm:w-8 sm:h-8 text-purple-600 dark:text-purple-500" />
-                                <span className="truncate">Speach-to-Text</span>
+                            <h1 className="text-xl sm:text-3xl md:text-4xl font-bold text-gray-800 dark:text-white flex items-center gap-2 sm:gap-3">
+                                <Mic className="w-5 h-5 sm:w-8 sm:h-8 text-purple-600 dark:text-purple-500" />
+                                <span className="truncate max-w-[150px] sm:max-w-none">Speach-to-Text</span>
                             </h1>
                         </div>
                         <img
                             src={darkMode ? "/Encounter_long_light.webp" : "/Encounter_long_dark.webp"}
                             alt="Encounter Logo"
-                            className="absolute left-1/2 -translate-x-1/2 top-4 md:top-6 mt-[5px] h-6 sm:h-8 md:h-10 z-20 pointer-events-none"
+                            className="absolute left-1/2 -translate-x-1/2 top-1 sm:top-4 md:top-6 h-4 sm:h-8 md:h-10 z-20 pointer-events-none opacity-80 sm:opacity-100"
                         />
                         <div className="flex gap-2 self-end sm:self-auto">
                             <button
@@ -1125,6 +1171,32 @@ Texte à analyser :
                                 </label>
                             </div>
 
+                            {/* Transcription Engine Selector */}
+                            <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg self-start sm:self-auto h-[46px] sm:h-[50px]">
+                                <button
+                                    onClick={() => !isListening && setTranscriptionEngine('google')}
+                                    disabled={isListening}
+                                    title="Utilise l'IA Cloud Gemini de Google"
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${transcriptionEngine === 'google'
+                                        ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-300 shadow-sm'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                    Gemini (Cloud)
+                                </button>
+                                <button
+                                    onClick={() => !isListening && setTranscriptionEngine('whisper')}
+                                    disabled={isListening}
+                                    title="Utilise Whisper en local (nécessite le serveur python lancé)"
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${transcriptionEngine === 'whisper'
+                                        ? 'bg-white dark:bg-gray-600 text-purple-600 dark:text-purple-300 shadow-sm'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                    Whisper (Local)
+                                </button>
+                            </div>
+
                             <LanguageSelector
                                 value={language}
                                 onChange={setLanguage}
@@ -1142,13 +1214,13 @@ Texte à analyser :
                                         value={targetLanguage}
                                         onChange={setTargetLanguage}
                                         languages={languages.filter(l => l.code !== language)}
-                                        className="flex-1"
+                                        className="flex-1 w-full sm:w-auto"
                                     />
                                 </>
                             )}
                         </div>
 
-                        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between w-full">
+                        <div className="flex flex-wrap gap-3 items-center justify-between w-full">
                             {/* Drag & Drop Zone */}
                             <div
                                 className={`flex-1 w-full p-4 border-2 border-dashed rounded-xl transition-all flex flex-col items-center justify-center gap-2 cursor-pointer ${isDragging
@@ -1319,7 +1391,7 @@ Texte à analyser :
                             )}
                         </div>
 
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                             {!isListening && transcript && (
                                 <button
                                     onClick={processWithAI}
@@ -1360,8 +1432,6 @@ Texte à analyser :
                                     <span>Transcription Originale</span>
                                     {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
                                 </h2>
-
-                                {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
                             </div>
                             <div
                                 ref={transcriptContainerRef}
@@ -1409,10 +1479,10 @@ Texte à analyser :
                         {enableTranslation && (
                             <div className="flex flex-col gap-2">
                                 <div className="flex items-center justify-between px-1">
-                                    <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-2">
+                                    <h2 className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-2">
                                         <span>Traduction instantanée ({targetLanguage})</span>
                                     </h2>
-                                    <div className="flex gap-2">
+                                    <div className="flex flex-wrap gap-2">
                                         <button
                                             onClick={() => copyToClipboard(translatedTranscript)}
                                             className="p-1 px-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1"
@@ -1538,6 +1608,33 @@ Texte à analyser :
                         )}
 
 
+                    </div>
+
+                    <div className="mb-6 flex flex-col sm:flex-row items-end gap-4 bg-gray-50/50 dark:bg-gray-900/20 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                        <div className="flex-1 w-full">
+                            <label htmlFor="customFilename" className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">
+                                Nom du fichier (optionnel)
+                            </label>
+                            <div className="relative">
+                                <input
+                                    id="customFilename"
+                                    type="text"
+                                    value={customFilename}
+                                    onChange={(e) => setCustomFilename(e.target.value)}
+                                    placeholder="Ex: transcription_reunion_01"
+                                    className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-700 dark:text-gray-300 transition-all text-sm shadow-sm"
+                                />
+                                <FileText className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                {customFilename && (
+                                    <button
+                                        onClick={() => setCustomFilename('')}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
+                                    >
+                                        <X className="w-3 h-3 text-gray-400" />
+                                    </button>
+                                )}
+                            </div>
+                        </div>
                     </div>
 
                     <div className="flex flex-wrap gap-2 sm:gap-3">
