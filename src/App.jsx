@@ -42,14 +42,18 @@ export default function SpeechToTextApp() {
     });
     const [autoAnalyze, setAutoAnalyze] = useState(true);
     const [aiInstructions, setAiInstructions] = useState(() => {
-        return localStorage.getItem('aiInstructions') || `Corrige ce texte en:
+        return (
+          localStorage.getItem("aiInstructions") ||
+          `Corrige ce texte en:
 1) vérifiant l'orthographe,
 2) supprimant les espaces manquants entre les mots,
 3) supprimant les sauts de lignes inutiles,
 4) supprimant les retours à la ligne inutiles,
-5) supprimant les Carriage Return Line Feed et vérifie le texte
-6) identifiant des paragraphes dans ce texte.
-7) met le en forme et produit le fichier texte brut`;
+5) supprimant les Carriage Return Line Feed et vérifie le texte,
+7) supprimant les phrases en anglais (phrases de plus d'un mot),
+6) identifiant des paragraphes dans ce texte,
+8) mettant enfin en forme et produit le fichier texte brut`
+        );
     });
     const [aiModel, setAiModel] = useState(() => {
         return localStorage.getItem('aiModel') || 'gemini-2.0-flash';
