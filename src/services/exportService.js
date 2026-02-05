@@ -37,7 +37,7 @@ export const generatePDF = ({ transcript, aiResult, translatedTranscript, enable
                 const individualSpaceWidth = totalSpaceToFill / (words.length - 1);
 
                 let currentX = x;
-                words.forEach((word, i) => {
+                words.forEach((word) => {
                     doc.text(word, currentX, y);
                     currentX += doc.getTextWidth(word) + individualSpaceWidth;
                 });

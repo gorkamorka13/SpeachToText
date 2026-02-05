@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Copy, Download, Save, Trash2, Mic, StopCircle, RefreshCw, FileAudio, Settings, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun, X } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Copy, Download, Save, Trash2, Mic, FileAudio, Settings, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun, X } from 'lucide-react';
 
 // Components
 import LanguageSelector from './components/LanguageSelector';
@@ -10,10 +10,12 @@ import TokenCounter from './components/TokenCounter';
 import AudioLevelMeter from './components/AudioLevelMeter';
 
 // Services & Utils
-import { languages } from './constants';
 import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
 import { trimSilence } from './utils/audioUtils';
 import { generatePDF, downloadDOCX } from './services/exportService';
+
+// Hooks
+import { useDarkMode, useDebounce, useNotification } from './hooks';
 
 export default function SpeechToTextApp() {
     // -----------------------------------------------------------------
@@ -56,12 +58,11 @@ export default function SpeechToTextApp() {
         );
     });
     const [aiModel, setAiModel] = useState(() => {
-        return localStorage.getItem('aiModel') || 'gemini-2.0-flash';
+        return localStorage.getItem('aiModel') || '';
     });
     const [aiResult, setAiResult] = useState('');
     const [isProcessingAI, setIsProcessingAI] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
-    const [notification, setNotification] = useState(null);
     const [darkMode, setDarkMode] = useState(() => {
         return localStorage.getItem('darkMode') === 'true';
     });
@@ -84,6 +85,9 @@ export default function SpeechToTextApp() {
     const [errorLogs, setErrorLogs] = useState([]);
     const [isRateLimited, setIsRateLimited] = useState(false);
     const [retryDelay, setRetryDelay] = useState(0);
+
+    // Custom hooks
+    const { notification, showNotification } = useNotification();
 
     // Audio Settings
     const [enableSystemAudio, setEnableSystemAudio] = useState(() => {
@@ -192,12 +196,7 @@ export default function SpeechToTextApp() {
         localStorage.setItem('pdfJustify', pdfJustify);
     }, [pdfJustify]);
 
-    const showNotification = (message) => {
-        setNotification(message);
-        setTimeout(() => setNotification(null), 3000); // Hide after 3 seconds
-    };
-
-    const logError = (error, context = "") => {
+    const logError = useCallback((error, context = "") => {
         const timestamp = new Date().toLocaleTimeString();
         let errorMessage = error;
         let details = "";
@@ -235,9 +234,9 @@ export default function SpeechToTextApp() {
 
         setErrorLogs(prev => [...prev, logEntry]);
         showNotification(`Erreur${context ? ' ' + context : ''}: ${errorMessage.substring(0, 100)}${errorMessage.length > 100 ? '...' : ''}`);
-    };
+    }, [showNotification]);
 
-    const downloadErrorLog = () => {
+    const downloadErrorLog = useCallback(() => {
         if (errorLogsRef.current.length === 0) {
             showNotification("Aucun log d'erreur à sauvegarder.");
             return;
@@ -249,7 +248,7 @@ export default function SpeechToTextApp() {
         document.body.appendChild(element);
         element.click();
         document.body.removeChild(element);
-    };
+    }, [showNotification]);
 
     // Save app settings to localStorage
     useEffect(() => {
@@ -299,7 +298,7 @@ export default function SpeechToTextApp() {
     }, [aiResult]);
 
 
-    const handleSpeak = (text, section, langCode) => {
+    const handleSpeak = useCallback((text, section, langCode) => {
         if (speakingSection === section) {
             window.speechSynthesis.cancel();
             setSpeakingSection(null);
@@ -344,9 +343,9 @@ export default function SpeechToTextApp() {
 
         setSpeakingSection(section);
         window.speechSynthesis.speak(utterance);
-    };
+    }, [speakingSection, showNotification]);
 
-    const copyToClipboard = async (text) => {
+    const copyToClipboard = useCallback(async (text) => {
         if (!text) {
             showNotification("Rien à copier.");
             return;
@@ -358,7 +357,7 @@ export default function SpeechToTextApp() {
             console.error('Failed to copy: ', err);
             showNotification("Erreur lors de la copie.");
         }
-    };
+    }, [showNotification]);
 
 
 
@@ -381,6 +380,14 @@ export default function SpeechToTextApp() {
                 showNotification("Transcription locale (Whisper) en cours...");
                 text = await transcribeWithWhisper(blobToUse, whisperUrl);
             } else {
+                // Check if AI model is configured for Gemini transcription
+                if (!aiModel) {
+                    showNotification("⚠️ Veuillez configurer un modèle Gemini dans les paramètres");
+                    setShowSettings(true);
+                    setIsTranscribing(false);
+                    return;
+                }
+
                 showNotification("Transcription cloud (Gemini) en cours...");
 
                 // Convert WebM to WAV for Gemini compatibility if needed
@@ -401,7 +408,7 @@ export default function SpeechToTextApp() {
                 const audioPart = await fileToGenerativePart(processedBlob);
                 const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
 
-                const response = await callGemini('gemini-2.0-flash-exp', [
+                const response = await callGemini(aiModel || 'gemini-2.5-flash-preview-05-20', [
                     {
                         role: 'user',
                         parts: [
@@ -468,6 +475,13 @@ export default function SpeechToTextApp() {
             textOverride.preventDefault();
         }
 
+        // Check if AI model is configured
+        if (!aiModel) {
+            showNotification("⚠️ Veuillez configurer un modèle Gemini dans les paramètres");
+            setShowSettings(true);
+            return;
+        }
+
         const textToAnalyze = (typeof textOverride === 'string' ? textOverride : null) || transcript;
         if (!textToAnalyze) {
             if (isAutoSavingRef.current) logError("Auto-Save: Pas de texte à analyser.");
@@ -527,7 +541,7 @@ Texte à analyser :
         }
     };
 
-    const finalizeAutoSave = (aiText) => {
+    const finalizeAutoSave = (_aiText) => {
         setTimeout(() => {
             downloadPDF(); // Save PDF (now has columns!)
             downloadTranscript();
@@ -639,20 +653,7 @@ Texte à analyser :
         }
     }, [language]);
 
-    // Custom Debounce Hook
-    const useDebounce = (value, delay) => {
-        const [debouncedValue, setDebouncedValue] = useState(value);
-        useEffect(() => {
-            const handler = setTimeout(() => {
-                setDebouncedValue(value);
-            }, delay);
-            return () => {
-                clearTimeout(handler);
-            };
-        }, [value, delay]);
-        return debouncedValue;
-    };
-
+    // Debounced values for translation
     const debouncedTranscript = useDebounce(transcript, 1000);
     const debouncedInterimTranscript = useDebounce(interimTranscript, 800);
 
@@ -682,17 +683,23 @@ Texte à analyser :
             setTranslatedTranscript('');
             return;
         }
+        // Check if AI model is configured for translation
+        if (!aiModel) {
+            setTranslatedTranscript('');
+            return;
+        }
+
         const fullText = (debouncedTranscript + debouncedInterimTranscript).trim();
         if (fullText) {
             const runTranslation = async () => {
-                const result = await translateWithGemini(fullText, language, targetLanguage);
+                const result = await translateWithGemini(fullText, language, targetLanguage, aiModel);
                 setTranslatedTranscript(result);
             };
             runTranslation();
         } else {
             setTranslatedTranscript('');
         }
-    }, [debouncedTranscript, debouncedInterimTranscript, targetLanguage, language, enableTranslation]);
+    }, [debouncedTranscript, debouncedInterimTranscript, targetLanguage, language, enableTranslation, aiModel]);
 
 
 
@@ -1087,14 +1094,14 @@ Texte à analyser :
         setAiResult('');
     };
 
-    const languages = [
+    const languages = useMemo(() => [
         { code: 'fr-FR', name: '🇫🇷 Français', countryCode: 'fr' },
         { code: 'en-US', name: '🇺🇸 English', countryCode: 'us' },
         { code: 'es-ES', name: '🇪🇸 Español', countryCode: 'es' },
         { code: 'de-DE', name: '🇩🇪 Deutsch', countryCode: 'de' },
         { code: 'it-IT', name: '🇮🇹 Italiano', countryCode: 'it' },
         { code: 'ar-SA', name: '🇸🇦 العربية', countryCode: 'sa' }
-    ];
+    ], []);
 
     if (!isSupported) {
         return (
@@ -1122,6 +1129,27 @@ Texte à analyser :
                                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                                 <span className="text-xs font-semibold tracking-wide uppercase">{notification}</span>
                             </div>
+                        </div>
+                    )}
+
+                    {/* Missing Model Warning */}
+                    {!aiModel && (
+                        <div className="mb-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                            <div className="flex-shrink-0">
+                                <Settings className="w-6 h-6 text-red-600 dark:text-red-400" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="text-sm font-bold text-red-800 dark:text-red-300">Configuration requise</h3>
+                                <p className="text-xs text-red-700 dark:text-red-400">
+                                    Veuillez configurer un modèle Gemini dans les paramètres pour utiliser l'IA.
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setShowSettings(true)}
+                                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors"
+                            >
+                                Ouvrir les paramètres
+                            </button>
                         </div>
                     )}
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">

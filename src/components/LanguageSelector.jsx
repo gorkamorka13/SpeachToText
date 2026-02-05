@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
 
-const LanguageSelector = ({ label, value, onChange, languages, disabled, className, isDark }) => {
+const LanguageSelector = memo(({ _label, value, onChange, languages, disabled, className, _isDark }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
 
@@ -15,6 +15,11 @@ const LanguageSelector = ({ label, value, onChange, languages, disabled, classNa
   }, []);
 
   const selectedLang = languages.find(l => l.code === value) || languages[0];
+
+  const handleSelect = useCallback((code) => {
+    onChange(code);
+    setIsOpen(false);
+  }, [onChange]);
 
   return (
     <div ref={containerRef} className={`relative flex-1 ${className}`}>
@@ -50,10 +55,7 @@ const LanguageSelector = ({ label, value, onChange, languages, disabled, classNa
               <button
                 key={lang.code}
                 type="button"
-                onClick={() => {
-                  onChange(lang.code);
-                  setIsOpen(false);
-                }}
+                onClick={() => handleSelect(lang.code)}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-md transition-colors ${value === lang.code
                   ? 'bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300'
                   : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50'
@@ -77,6 +79,6 @@ const LanguageSelector = ({ label, value, onChange, languages, disabled, classNa
       )}
     </div>
   );
-};
+});
 
 export default LanguageSelector;

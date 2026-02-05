@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 
-const AudioLevelMeter = ({ volumeLevel }) => {
+const AudioLevelMeter = memo(({ volumeLevel }) => {
+  const percentage = useMemo(() => Math.round((volumeLevel / 128) * 100), [volumeLevel]);
   return (
     <div className="w-full bg-gray-100 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-200 dark:border-gray-600 animate-in fade-in zoom-in duration-300">
       <div className="flex items-center justify-between mb-1.5">
@@ -13,7 +14,7 @@ const AudioLevelMeter = ({ volumeLevel }) => {
           Niveau Signal
         </span>
         <span className="text-[10px] font-mono font-medium text-purple-600 dark:text-purple-400">
-          {Math.round((volumeLevel / 128) * 100)}%
+          {percentage}%
         </span>
       </div>
       <div className="w-full h-2 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden flex gap-0.5">
@@ -33,6 +34,6 @@ const AudioLevelMeter = ({ volumeLevel }) => {
       </div>
     </div>
   );
-};
+});
 
 export default AudioLevelMeter;

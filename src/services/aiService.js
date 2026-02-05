@@ -159,7 +159,10 @@ export const fileToGenerativePart = async (blob) => {
     }
 };
 
-export const translateWithGemini = async (text, sourceLang, targetLang, modelName = 'gemini-2.0-flash') => {
+export const translateWithGemini = async (text, sourceLang, targetLang, modelName) => {
+    if (!modelName) {
+        throw new Error("Model name is required for translation");
+    }
     if (!text.trim()) return "";
     const prompt = `Translate the following text from ${sourceLang} to ${targetLang}. Preserve formatting and paragraphs. Output ONLY the translation.
 

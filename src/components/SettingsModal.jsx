@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { memo, useCallback } from 'react';
 import { Settings, X, FileText, Info } from 'lucide-react';
 
-const SettingsModal = ({
+const SettingsModal = memo(({
   show,
   onClose,
   aiModel,
@@ -11,7 +11,7 @@ const SettingsModal = ({
   pdfJustify,
   setPdfJustify,
   transcriptionEngine,
-  setTranscriptionEngine,
+  _setTranscriptionEngine,
   whisperUrl,
   setWhisperUrl
 }) => {
@@ -66,15 +66,20 @@ const SettingsModal = ({
         {/* Model Configuration */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Modèle Gemini (Cloud)
+            Modèle Gemini (Cloud) <span className="text-red-500">*</span>
           </label>
           <input
             type="text"
             value={aiModel}
             onChange={(e) => setAiModel(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            placeholder="gemini-2.0-flash"
+            className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${!aiModel ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
+            placeholder="Entrez le nom du modèle Gemini"
           />
+          {!aiModel && (
+            <p className="text-xs text-red-500 mt-1">
+              ⚠️ Ce champ est obligatoire
+            </p>
+          )}
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             Utilisé pour l'Analyse IA et la Traduction.
           </p>
@@ -124,6 +129,6 @@ const SettingsModal = ({
       </div>
     </div>
   );
-};
+});
 
 export default SettingsModal;
