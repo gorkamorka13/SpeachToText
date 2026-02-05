@@ -12,6 +12,7 @@ import AudioLevelMeter from './components/AudioLevelMeter';
 // Services & Utils
 import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
 import { trimSilence } from './utils/audioUtils';
+import { sanitizeInput, sanitizeFilename, validateFileType, escapeHtml } from './utils/securityUtils';
 import { generatePDF, downloadDOCX } from './services/exportService';
 
 // Hooks
@@ -492,13 +493,17 @@ export default function SpeechToTextApp() {
         setAiResult('');
 
         try {
+            // Sanitize instructions to prevent prompt injection
+            const sanitizedInstructions = sanitizeInput(aiInstructions);
+            const sanitizedText = sanitizeInput(textToAnalyze);
+            
             const prompt = `
-Instructions de l'utilisateur : ${aiInstructions}
+Instructions de l'utilisateur : ${sanitizedInstructions}
 
 IMPORTANT : Ne jamais ajouter de texte introductif comme "Voici le texte corrigé" ou "Résultat :". Renvoie UNIQUEMENT le contenu demandé.
 
 Texte à analyser :
-"${textToAnalyze}"
+"${sanitizedText}"
             `;
 
             const response = await callGemini(aiModel, [
@@ -903,20 +908,16 @@ Texte à analyser :
         const file = e.target.files[0];
         if (!file) return;
 
-        const isAudio = file.type.startsWith('audio/') ||
-            file.type === 'video/webm' ||
-            file.name.toLowerCase().endsWith('.webm') ||
-            file.name.toLowerCase().endsWith('.mp3') ||
-            file.name.toLowerCase().endsWith('.wav');
-
-        if (isAudio) {
-            clearTranscript();
-            setUploadedFile(file);
-            setAudioBlob(file); // Set audioBlob so the player and Gemini can use it
-            showNotification(`Fichier "${file.name}" chargé`);
-        } else {
-            logError(`Fichier non reconnu (${file.type}). Veuillez sélectionner un fichier audio valide.`);
+        // Validate file type
+        if (!validateFileType(file)) {
+            logError(`Fichier non reconnu (${sanitizeInput(file.type)}). Veuillez sélectionner un fichier audio valide.`);
+            return;
         }
+
+        clearTranscript();
+        setUploadedFile(file);
+        setAudioBlob(file); // Set audioBlob so the player and Gemini can use it
+        showNotification(`Fichier "${sanitizeInput(file.name)}" chargé`);
     };
 
     const handleDragOver = (e) => {
@@ -939,20 +940,16 @@ Texte à analyser :
         const file = e.dataTransfer.files[0];
         if (!file) return;
 
-        const isAudio = file.type.startsWith('audio/') ||
-            file.type === 'video/webm' ||
-            file.name.toLowerCase().endsWith('.webm') ||
-            file.name.toLowerCase().endsWith('.mp3') ||
-            file.name.toLowerCase().endsWith('.wav');
-
-        if (isAudio) {
-            clearTranscript();
-            setUploadedFile(file);
-            setAudioBlob(file); // Set audioBlob so the player and Gemini can use it
-            showNotification(`Fichier "${file.name}" déposé`);
-        } else {
-            logError(`Fichier non reconnu (${file.type}). Veuillez déposez un fichier audio valide.`);
+        // Validate file type
+        if (!validateFileType(file)) {
+            logError(`Fichier non reconnu (${sanitizeInput(file.type)}). Veuillez déposez un fichier audio valide.`);
+            return;
         }
+
+        clearTranscript();
+        setUploadedFile(file);
+        setAudioBlob(file); // Set audioBlob so the player and Gemini can use it
+        showNotification(`Fichier "${sanitizeInput(file.name)}" déposé`);
     };
 
 
@@ -965,8 +962,9 @@ Texte à analyser :
         const element = document.createElement('a');
         const file = new Blob([textToSave], { type: 'text/plain' });
         element.href = URL.createObjectURL(file);
-        const fileName = customFilename.trim()
-            ? `${customFilename.trim()}.txt`
+        const sanitizedFilename = sanitizeFilename(customFilename.trim());
+        const fileName = sanitizedFilename
+            ? `${sanitizedFilename}.txt`
             : `transcription-${new Date().toISOString().slice(0, 10)}.txt`;
         element.download = fileName;
         document.body.appendChild(element);
@@ -984,8 +982,9 @@ Texte à analyser :
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;
-        const fileName = customFilename.trim()
-            ? `${customFilename.trim()}.webm`
+        const sanitizedFilename = sanitizeFilename(customFilename.trim());
+        const fileName = sanitizedFilename
+            ? `${sanitizedFilename}.webm`
             : `recording-${new Date().toISOString().slice(0, 10)}.webm`;
         a.download = fileName;
         document.body.appendChild(a);
@@ -1003,12 +1002,13 @@ Texte à analyser :
             enableTranslation,
             targetLanguage,
             pdfJustify,
-            customFilename: customFilename.trim()
+            customFilename: sanitizeFilename(customFilename.trim())
         });
 
         if (doc) {
-            const fileName = customFilename.trim()
-                ? `${customFilename.trim()}.pdf`
+            const sanitizedFilename = sanitizeFilename(customFilename.trim());
+            const fileName = sanitizedFilename
+                ? `${sanitizedFilename}.pdf`
                 : `transcription-${new Date().toISOString().slice(0, 10)}.pdf`;
             doc.save(fileName);
             showNotification("Fichier PDF téléchargé !");
@@ -1025,7 +1025,7 @@ Texte à analyser :
             targetLanguage,
             aiModel,
             pdfJustify,
-            customFilename: customFilename.trim()
+            customFilename: sanitizeFilename(customFilename.trim())
         });
         showNotification("Fichier Word téléchargé !");
     };
@@ -1042,10 +1042,13 @@ Texte à analyser :
     };
 
     const sendEmail = () => {
+        // Sanitize inputs before using in mailto link
+        const sanitizedSubject = sanitizeInput(emailSubject);
+        const sanitizedRecipient = sanitizeInput(emailRecipient);
         const text = aiResultRef.current || transcriptRef.current;
-        const subject = encodeURIComponent(emailSubject);
+        const subject = encodeURIComponent(sanitizedSubject);
         const body = encodeURIComponent(text);
-        const recipient = encodeURIComponent(emailRecipient);
+        const recipient = encodeURIComponent(sanitizedRecipient);
 
         window.location.href = `mailto:${recipient}?subject=${subject}&body=${body}`;
         setShowEmailModal(false);

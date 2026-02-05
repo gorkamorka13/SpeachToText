@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Check } from 'lucide-react';
 
-const SuccessModal = ({ show, onClose }) => {
+const SuccessModal = memo(({ show, onClose }) => {
   if (!show) return null;
 
   return (
@@ -37,6 +37,6 @@ const SuccessModal = ({ show, onClose }) => {
       </div>
     </div>
   );
-};
+});
 
 export default SuccessModal;

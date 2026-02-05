@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Mail, X, Download, Send } from 'lucide-react';
+import { sanitizeInput } from '../utils/securityUtils';
 
-const EmailModal = ({
+const EmailModal = memo(({
   show,
   onClose,
   emailRecipient,
@@ -99,6 +100,6 @@ const EmailModal = ({
       </div>
     </div>
   );
-};
+});
 
 export default EmailModal;

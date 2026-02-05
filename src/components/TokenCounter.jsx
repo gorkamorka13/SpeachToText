@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { RefreshCw } from 'lucide-react';
 
-const TokenCounter = ({ tokenUsage, onReset }) => {
+const TokenCounter = memo(({ tokenUsage, onReset }) => {
   return (
     <div className="flex flex-wrap items-center gap-3 text-[10px] font-medium uppercase tracking-wider border-l border-gray-200 dark:border-gray-700 pl-4 ml-2">
       <div className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500" title={`P:${tokenUsage.lastPrompt || 0} R:${tokenUsage.lastResponse || 0}`}>
@@ -21,6 +21,6 @@ const TokenCounter = ({ tokenUsage, onReset }) => {
       </button>
     </div>
   );
-};
+});
 
 export default TokenCounter;
