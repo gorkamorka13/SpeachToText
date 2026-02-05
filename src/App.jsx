@@ -8,6 +8,7 @@ import SuccessModal from './components/SuccessModal';
 import EmailModal from './components/EmailModal';
 import TokenCounter from './components/TokenCounter';
 import AudioLevelMeter from './components/AudioLevelMeter';
+import VersionInfo from './components/VersionInfo';
 
 // Services & Utils
 import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
@@ -1840,10 +1841,11 @@ Texte à analyser :
             />
 
             {/* Copyright Footer */}
-            <div className="text-center mt-8 pb-4">
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Copyright Michel ESPARSA - {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'Version Inconnue'}
+            <div className="mt-8 pb-4 space-y-2">
+                <p className="text-sm text-gray-500 dark:text-gray-400 text-center">
+                    © Michel ESPARSA - Encounter
                 </p>
+                <VersionInfo />
             </div>
         </div>
     );
