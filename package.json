@@ -1,10 +1,11 @@
 {
   "name": "speech-to-text-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "npm version patch --no-git-tag-version",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",

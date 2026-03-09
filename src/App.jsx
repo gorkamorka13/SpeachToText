@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Copy, Download, Save, Trash2, Mic, FileAudio, Settings, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun, X } from 'lucide-react';
+import { Copy, Download, Save, Trash2, Mic, FileAudio, Settings, Mail, Speaker, Clock, FileText, FileBadge, Volume2, Square, MicOff, Languages, Moon, Sun, X, Loader2 } from 'lucide-react';
 
 // Components
 import LanguageSelector from './components/LanguageSelector';
@@ -11,13 +11,13 @@ import AudioLevelMeter from './components/AudioLevelMeter';
 import VersionInfo from './components/VersionInfo';
 
 // Services & Utils
-import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
+import { callGemini, extractTextFromResponse, transcribeWithWhisper, transcribeWithGroq, fileToGenerativePart, translateWithGemini } from './services/aiService';
 import { trimSilence } from './utils/audioUtils';
 import { sanitizeInput, sanitizeFilename, validateFileType, escapeHtml } from './utils/securityUtils';
 import { generatePDF, downloadDOCX } from './services/exportService';
 
 // Hooks
-import { useDarkMode, useDebounce, useNotification } from './hooks';
+import { useDebounce, useNotification } from './hooks';
 
 export default function SpeechToTextApp() {
     // -----------------------------------------------------------------
@@ -44,6 +44,9 @@ export default function SpeechToTextApp() {
     const [whisperUrl, setWhisperUrl] = useState(() => {
         return localStorage.getItem('whisperUrl') || 'http://localhost:5000/transcribe';
     });
+    const [groqApiKey, setGroqApiKey] = useState(() => {
+        return localStorage.getItem('groqApiKey') || import.meta.env.VITE_GROQ_API_KEY || '';
+    });
     const [autoAnalyze, setAutoAnalyze] = useState(true);
     const [aiInstructions, setAiInstructions] = useState(() => {
         return (
@@ -54,16 +57,17 @@ export default function SpeechToTextApp() {
 3) supprimant les sauts de lignes inutiles,
 4) supprimant les retours à la ligne inutiles,
 5) supprimant les Carriage Return Line Feed et vérifie le texte,
-7) supprimant les phrases en anglais (phrases de plus d'un mot),
-6) identifiant des paragraphes dans ce texte,
+6) supprimant les phrases en anglais si ls transcription s'effectue depuis le français (phrases de plus d'un mot),
+7) identifiant des paragraphes dans ce texte,
 8) mettant enfin en forme et produit le fichier texte brut`
         );
     });
     const [aiModel, setAiModel] = useState(() => {
-        return localStorage.getItem('aiModel') || '';
+        return localStorage.getItem('aiModel') || 'gemini-2.5-flash';
     });
     const [aiResult, setAiResult] = useState('');
     const [isProcessingAI, setIsProcessingAI] = useState(false);
+    const [isTranslating, setIsTranslating] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [darkMode, setDarkMode] = useState(() => {
         return localStorage.getItem('darkMode') === 'true';
@@ -85,8 +89,6 @@ export default function SpeechToTextApp() {
     });
     const [speakingSection, setSpeakingSection] = useState(null);
     const [errorLogs, setErrorLogs] = useState([]);
-    const [isRateLimited, setIsRateLimited] = useState(false);
-    const [retryDelay, setRetryDelay] = useState(0);
 
     // Custom hooks
     const { notification, showNotification } = useNotification();
@@ -160,10 +162,23 @@ export default function SpeechToTextApp() {
     // Ensure source and target languages are never the same
     useEffect(() => {
         if (language === targetLanguage) {
-            // If source became French, switch target to English, otherwise switch to French
-            setTargetLanguage(language === 'fr-FR' ? 'en-US' : 'fr-FR');
+            const allLangs = ['fr-FR', 'en-US', 'es-ES', 'de-DE', 'it-IT', 'ar-SA'];
+            const alternative = allLangs.find(l => l !== language);
+            if (alternative) setTargetLanguage(alternative);
         }
     }, [language, targetLanguage]);
+
+    // T1: Stable Object URL for audio player (avoids memory leak on each render)
+    const audioObjectUrl = useMemo(() => {
+        if (!audioBlob) return null;
+        return URL.createObjectURL(audioBlob);
+    }, [audioBlob]);
+
+    useEffect(() => {
+        return () => {
+            if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
+        };
+    }, [audioObjectUrl]);
 
 
     // -----------------------------------------------------------------
@@ -238,18 +253,10 @@ export default function SpeechToTextApp() {
         showNotification(`Erreur${context ? ' ' + context : ''}: ${errorMessage.substring(0, 100)}${errorMessage.length > 100 ? '...' : ''}`);
     }, [showNotification]);
 
-    const downloadErrorLog = useCallback(() => {
-        if (errorLogsRef.current.length === 0) {
-            showNotification("Aucun log d'erreur à sauvegarder.");
-            return;
-        }
-        const element = document.createElement('a');
-        const file = new Blob([errorLogsRef.current.join('\n')], { type: 'text/plain' });
-        element.href = URL.createObjectURL(file);
-        element.download = `error-log-${new Date().toISOString().slice(0, 10)}.txt`;
-        document.body.appendChild(element);
-        element.click();
-        document.body.removeChild(element);
+    const clearErrorLogs = useCallback(() => {
+        setErrorLogs([]);
+        errorLogsRef.current = [];
+        showNotification("Logs d'erreur effacés.");
     }, [showNotification]);
 
     // Save app settings to localStorage
@@ -268,6 +275,10 @@ export default function SpeechToTextApp() {
     useEffect(() => {
         localStorage.setItem('whisperUrl', whisperUrl);
     }, [whisperUrl]);
+
+    useEffect(() => {
+        localStorage.setItem('groqApiKey', groqApiKey);
+    }, [groqApiKey]);
 
     useEffect(() => {
         localStorage.setItem('enableTranslation', enableTranslation);
@@ -381,6 +392,9 @@ export default function SpeechToTextApp() {
             if (transcriptionEngine === 'whisper') {
                 showNotification("Transcription locale (Whisper) en cours...");
                 text = await transcribeWithWhisper(blobToUse, whisperUrl);
+            } else if (transcriptionEngine === 'groq') {
+                showNotification("Transcription cloud (Groq Whisper) en cours...");
+                text = await transcribeWithGroq(blobToUse, groqApiKey);
             } else {
                 // Check if AI model is configured for Gemini transcription
                 if (!aiModel) {
@@ -410,7 +424,7 @@ export default function SpeechToTextApp() {
                 const audioPart = await fileToGenerativePart(processedBlob);
                 const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
 
-                const response = await callGemini(aiModel || 'gemini-2.5-flash-preview-05-20', [
+                const response = await callGemini(aiModel || 'gemini-2.5-flash', [
                     {
                         role: 'user',
                         parts: [
@@ -492,12 +506,13 @@ export default function SpeechToTextApp() {
 
         setIsProcessingAI(true);
         setAiResult('');
+        showNotification(`Analyse IA (${aiModel}) en cours...`);
 
         try {
             // Sanitize instructions to prevent prompt injection
             const sanitizedInstructions = sanitizeInput(aiInstructions);
             const sanitizedText = sanitizeInput(textToAnalyze);
-            
+
             const prompt = `
 Instructions de l'utilisateur : ${sanitizedInstructions}
 
@@ -683,6 +698,23 @@ Texte à analyser :
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
 
+    const forceTranslation = useCallback(async () => {
+        if (!aiModel) return;
+        const fullText = (transcript + interimTranscript).trim();
+        if (fullText) {
+            setIsTranslating(true);
+            showNotification("Traduction manuelle en cours...");
+            try {
+                const result = await translateWithGemini(fullText, language, targetLanguage, aiModel);
+                setTranslatedTranscript(result);
+            } catch (error) {
+                logError(error, "Traduction Manuelle");
+            } finally {
+                setIsTranslating(false);
+            }
+        }
+    }, [transcript, interimTranscript, aiModel, language, targetLanguage, showNotification, logError]);
+
     // Real-time translation effect (Debounced)
     useEffect(() => {
         if (!enableTranslation) {
@@ -698,8 +730,17 @@ Texte à analyser :
         const fullText = (debouncedTranscript + debouncedInterimTranscript).trim();
         if (fullText) {
             const runTranslation = async () => {
-                const result = await translateWithGemini(fullText, language, targetLanguage, aiModel);
-                setTranslatedTranscript(result);
+                setIsTranslating(true);
+                const translationModel = aiModel || 'gemini-2.5-flash';
+                showNotification(`Traduction via Gemini (${translationModel})...`);
+                try {
+                    const result = await translateWithGemini(fullText, language, targetLanguage, translationModel);
+                    setTranslatedTranscript(result);
+                } catch (error) {
+                    logError(error, "Traduction");
+                } finally {
+                    setIsTranslating(false);
+                }
             };
             runTranslation();
         } else {
@@ -805,7 +846,7 @@ Texte à analyser :
                 } catch (err) {
                     console.warn("System audio selection cancelled or failed:", err);
                     logError("Audio système refusé/annulé.");
-                    alert("Capture audio système annulée. Seul le microphone sera enregistré.");
+                    showNotification("Capture audio système annulée. Seul le microphone sera enregistré.");
                 }
             }
 
@@ -851,7 +892,7 @@ Texte à analyser :
             logError(err, "Microphone");
             setIsListening(false);
             isListeningRef.current = false;
-            alert("Erreur microphone/audio : " + (err.message || err));
+            showNotification("Erreur microphone/audio : " + (err.message || err));
         }
     };
 
@@ -1062,6 +1103,7 @@ Texte à analyser :
         const newTranscript = {
             id: Date.now(),
             text: transcript,
+            aiResult: aiResult,
             translatedText: translatedTranscript,
             date: new Date().toISOString(),
             language: language,
@@ -1077,12 +1119,10 @@ Texte à analyser :
     const loadTranscript = (saved) => {
         setTranscript(saved.text);
         setLanguage(saved.language);
-        if (saved.translatedText) {
-            setTranslatedTranscript(saved.translatedText);
-        }
-        if (saved.targetLanguage) {
-            setTargetLanguage(saved.targetLanguage);
-        }
+        if (saved.aiResult) setAiResult(saved.aiResult);
+        if (saved.translatedText) setTranslatedTranscript(saved.translatedText);
+        if (saved.targetLanguage) setTargetLanguage(saved.targetLanguage);
+        showNotification("Transcription chargée depuis l'historique !");
     };
 
     const deleteTranscript = (id) => {
@@ -1100,7 +1140,7 @@ Texte à analyser :
 
     const languages = useMemo(() => [
         { code: 'fr-FR', name: '🇫🇷 Français', countryCode: 'fr' },
-        { code: 'en-US', name: '🇺🇸 English', countryCode: 'us' },
+        { code: 'en-US', name: '🇬🇧 English', countryCode: 'gb' },
         { code: 'es-ES', name: '🇪🇸 Español', countryCode: 'es' },
         { code: 'de-DE', name: '🇩🇪 Deutsch', countryCode: 'de' },
         { code: 'it-IT', name: '🇮🇹 Italiano', countryCode: 'it' },
@@ -1160,7 +1200,7 @@ Texte à analyser :
                         <div className="flex items-center gap-12 w-full sm:w-auto">
                             <h1 className="text-xl sm:text-3xl md:text-4xl font-bold text-gray-800 dark:text-white flex items-center gap-2 sm:gap-3">
                                 <Mic className="w-5 h-5 sm:w-8 sm:h-8 text-purple-600 dark:text-purple-500" />
-                                <span className="truncate max-w-[150px] sm:max-w-none">Speach-to-Text</span>
+                                <span className="truncate max-w-[150px] sm:max-w-none">Speech-to-Text</span>
                             </h1>
                         </div>
                         <img
@@ -1220,7 +1260,18 @@ Texte à analyser :
                                         : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                                         } disabled:opacity-50 disabled:cursor-not-allowed`}
                                 >
-                                    Gemini (Cloud)
+                                    Gemini
+                                </button>
+                                <button
+                                    onClick={() => !isListening && setTranscriptionEngine('groq')}
+                                    disabled={isListening}
+                                    title="Utilise Whisper Cloud via Groq (Ultra-rapide)"
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${transcriptionEngine === 'groq'
+                                        ? 'bg-white dark:bg-gray-600 text-orange-600 dark:text-orange-400 shadow-sm'
+                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                    Groq
                                 </button>
                                 <button
                                     onClick={() => !isListening && setTranscriptionEngine('whisper')}
@@ -1231,14 +1282,14 @@ Texte à analyser :
                                         : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                                         } disabled:opacity-50 disabled:cursor-not-allowed`}
                                 >
-                                    Whisper (Local)
+                                    Local
                                 </button>
                             </div>
 
                             <LanguageSelector
                                 value={language}
                                 onChange={setLanguage}
-                                languages={languages.filter(l => l.code !== targetLanguage)}
+                                languages={languages}
                                 disabled={isListening}
                             />
 
@@ -1251,7 +1302,7 @@ Texte à analyser :
                                     <LanguageSelector
                                         value={targetLanguage}
                                         onChange={setTargetLanguage}
-                                        languages={languages.filter(l => l.code !== language)}
+                                        languages={languages}
                                         className="flex-1 w-full sm:w-auto"
                                     />
                                 </>
@@ -1474,9 +1525,10 @@ Texte à analyser :
                         <div className="flex flex-col gap-2">
                             <div className="flex items-center justify-between px-1">
                                 <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                                    <span>Transcription Originale</span>
+                                    <span>Transcription Originale ({languages.find(l => l.code === language)?.name || language})</span>
                                     {isListening && <span className="text-red-500 animate-pulse text-[10px]">● Enregistrement</span>}
                                 </h2>
+                                {transcript && <span className="text-[10px] text-gray-400 font-mono">{transcript.trim().split(/\s+/).filter(Boolean).length} mots</span>}
                             </div>
                             <div
                                 ref={transcriptContainerRef}
@@ -1525,9 +1577,25 @@ Texte à analyser :
                             <div className="flex flex-col gap-2">
                                 <div className="flex items-center justify-between px-1">
                                     <h2 className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider text-purple-600 dark:text-purple-400 flex items-center gap-2">
-                                        <span>Traduction instantanée ({targetLanguage})</span>
+                                        <span>Traduction vers {languages.find(l => l.code === targetLanguage)?.name || targetLanguage}</span>
+                                        {isTranslating && (
+                                            <span className="flex items-center gap-1">
+                                                <Loader2 className="w-5 h-5 animate-spin text-purple-500" />
+                                                <span className="inline-block w-2 h-2 border-2 border-purple-500 border-t-transparent rounded-full animate-spin sm:hidden"></span>
+                                            </span>
+                                        )}
                                     </h2>
+                                    {translatedTranscript && <span className="text-[10px] text-gray-400 font-mono">{translatedTranscript.trim().split(/\s+/).filter(Boolean).length} mots</span>}
                                     <div className="flex flex-wrap gap-2">
+                                        <button
+                                            onClick={forceTranslation}
+                                            disabled={isTranslating}
+                                            className="p-1 px-2 bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded shadow-sm border border-purple-200 dark:border-purple-800 hover:bg-purple-600 hover:text-white transition-all flex items-center gap-1"
+                                            title="Forcer la traduction maintenant"
+                                        >
+                                            <Languages className="w-4 h-4" />
+                                            <span className="text-[10px] font-bold uppercase tracking-wider">Traduire</span>
+                                        </button>
                                         <button
                                             onClick={() => copyToClipboard(translatedTranscript)}
                                             className="p-1 px-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1"
@@ -1567,7 +1635,9 @@ Texte à analyser :
                             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bot text-purple-600 dark:text-purple-400"><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></svg>
                                 <span className="text-purple-600 dark:text-purple-400">Résultat de l'Agent IA</span>
+                                {isProcessingAI && <Loader2 className="w-3 h-3 animate-spin text-purple-500" />}
                             </h3>
+                            {aiResult && <span className="text-[10px] text-gray-400 font-mono">{aiResult.trim().split(/\s+/).filter(Boolean).length} mots</span>}
 
                             {/* Integrated Token Counter */}
                             <div className="flex flex-wrap items-center gap-3 text-[10px] font-medium uppercase tracking-wider border-l border-gray-200 dark:border-gray-700 pl-4 ml-2">
@@ -1612,24 +1682,6 @@ Texte à analyser :
                     </div>
 
                     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 min-h-[80px] h-auto border border-gray-100 dark:border-gray-700 relative mb-4 transition-all duration-300">
-                        {isRateLimited && (
-                            <div className="mb-4 bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg border border-amber-200 dark:border-amber-800 flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
-                                <div className="flex-shrink-0">
-                                    <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400 animate-pulse" />
-                                </div>
-                                <div className="flex-1">
-                                    <h4 className="text-sm font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider">Limite API atteinte</h4>
-                                    <p className="text-xs text-amber-700 dark:text-amber-400">
-                                        Trop de requêtes. Nouvelle tentative dans <span className="font-mono font-bold text-base ml-1">{retryDelay}s</span>...
-                                    </p>
-                                </div>
-                                <div className="flex gap-1">
-                                    {[...Array(3)].map((_, i) => (
-                                        <div key={i} className="w-1 h-1 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.1}s` }}></div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
                         {isProcessingAI ? (
                             <div className="flex items-center gap-2 text-purple-400 italic">
                                 <div className="animate-spin h-4 w-4 border-2 border-purple-500 border-t-transparent rounded-full"></div>
@@ -1740,7 +1792,11 @@ Texte à analyser :
                             Sauvegarde Historique
                         </button>
                         <button
-                            onClick={clearTranscript}
+                            onClick={() => {
+                                if (window.confirm('Effacer la transcription, le résultat IA et l\'audio ?')) {
+                                    clearTranscript();
+                                }
+                            }}
                             disabled={!transcript && !audioBlob}
                             className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
                         >
@@ -1749,14 +1805,30 @@ Texte à analyser :
                         </button>
                         {errorLogs.length > 0 && (
                             <button
-                                onClick={downloadErrorLog}
-                                className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm sm:text-base"
+                                onClick={clearErrorLogs}
+                                className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm sm:text-base"
+                                title="Vider les logs d'erreur"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-triangle"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><path d="M12 9v4" /><path d="M12 17h.01" /></svg>
-                                Logs d'erreur ({errorLogs.length})
+                                <Trash2 className="w-4 h-4" />
+                                Vider les Logs ({errorLogs.length})
                             </button>
                         )}
                     </div>
+
+                    {/* Error Logs TextArea Display */}
+                    {errorLogs.length > 0 && (
+                        <div className="mt-6 animate-in fade-in slide-in-from-top-2 duration-300">
+                            <h3 className="text-sm font-semibold text-red-500 dark:text-red-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-circle"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+                                Logs d'erreurs récents
+                            </h3>
+                            <textarea
+                                readOnly
+                                value={errorLogs.join('\n')}
+                                className="w-full h-32 p-3 bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/30 rounded-lg font-mono text-xs text-red-800 dark:text-red-300 resize-none shadow-inner"
+                            />
+                        </div>
+                    )}
 
                     {/* Audio Player for Verification */}
                     {audioBlob && (
@@ -1765,7 +1837,7 @@ Texte à analyser :
                                 <Speaker className="w-4 h-4" />
                                 Vérification Audio
                             </h3>
-                            <audio controls src={URL.createObjectURL(audioBlob)} className="w-full" />
+                            <audio controls src={audioObjectUrl} className="w-full" />
                         </div>
                     )}
                 </div>
@@ -1821,6 +1893,8 @@ Texte à analyser :
                 setTranscriptionEngine={setTranscriptionEngine}
                 whisperUrl={whisperUrl}
                 setWhisperUrl={setWhisperUrl}
+                groqApiKey={groqApiKey}
+                setGroqApiKey={setGroqApiKey}
             />
 
             <SuccessModal

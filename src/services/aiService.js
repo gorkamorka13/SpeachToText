@@ -27,35 +27,40 @@ export const callGemini = async (modelName, contents, maxRetries = 3) => {
                 throw new Error("Clé API Gemini manquante. Veuillez configurer VITE_GEMINI_API_KEY.");
             }
 
-            console.log(`[Gemini] Envoi de ${sizeMo} Mo au modèle ${modelName}`);
+            console.log(`[Gemini] Appui sur le bouton, envoi de ${sizeMo} Mo au modèle ${modelName}`);
 
-            // 2. Robust Initialization (Handle both string and object formats)
-            let genAI;
-            try {
-                genAI = new GoogleGenAI(apiKey);
-            } catch (e) {
-                genAI = new GoogleGenAI({ apiKey });
-            }
+            // 3. Robust Call Pattern with Timeout (30 seconds)
+            const apiCall = (async () => {
+                let genAI;
+                try {
+                    genAI = new GoogleGenAI(apiKey);
+                } catch (e) {
+                    genAI = new GoogleGenAI({ apiKey });
+                }
 
-            // 3. Robust Call Pattern (Handle different SDK versions/flavors)
-            let result;
-            if (typeof genAI.getGenerativeModel === 'function') {
-                const model = genAI.getGenerativeModel({ model: modelName });
-                const res = await model.generateContent({ contents });
-                // @google/generative-ai style
-                result = await res.response;
-            } else if (genAI.models && typeof genAI.models.generateContent === 'function') {
-                // @google/genai (Vertex AI style)
-                result = await genAI.models.generateContent({
-                    model: modelName,
-                    contents: contents
-                });
-            } else {
-                throw new Error("Impossible de trouver une méthode d'appel valide dans le SDK Google GenAI.");
-            }
+                if (typeof genAI.getGenerativeModel === 'function') {
+                    const model = genAI.getGenerativeModel({ model: modelName });
+                    const res = await model.generateContent({ contents });
+                    return await res.response;
+                } else if (genAI.models && typeof genAI.models.generateContent === 'function') {
+                    return await genAI.models.generateContent({
+                        model: modelName,
+                        contents: contents
+                    });
+                } else {
+                    throw new Error("Impossible de trouver une méthode d'appel valide dans le SDK Google GenAI.");
+                }
+            })();
 
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Timeout : L'IA n'a pas répondu après 30 secondes.")), 30000)
+            );
+
+            const result = await Promise.race([apiCall, timeoutPromise]);
+            console.log("[Gemini] Réponse reçue avec succès.");
             return result;
         } catch (err) {
+            console.error(`[Gemini] Erreur tentative ${attempt + 1}:`, err.message);
             const isRateLimitError = err.status === 429 ||
                                    (err.message && err.message.includes("429")) ||
                                    (err.message && err.message.includes("RESOURCE_EXHAUSTED"));
@@ -105,6 +110,34 @@ export const transcribeWithWhisper = async (blob, url = 'http://localhost:5000/t
     if (!response.ok) {
         const error = await response.json();
         throw new Error(error.error || "Erreur lors de la transcription Whisper");
+    }
+
+    const data = await response.json();
+    return data.text;
+};
+
+export const transcribeWithGroq = async (blob, apiKey) => {
+    const finalApiKey = apiKey || import.meta.env.VITE_GROQ_API_KEY;
+    if (!finalApiKey || finalApiKey === 'YOUR_GROQ_API_KEY_HERE') {
+        throw new Error("Clé API Groq manquante. Veuillez la configurer dans les paramètres ou le fichier .env.");
+    }
+
+    const formData = new FormData();
+    formData.append('file', blob, 'recording.wav');
+    formData.append('model', 'whisper-large-v3-turbo');
+    formData.append('response_format', 'json');
+
+    const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${finalApiKey}`
+        },
+        body: formData
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || `Erreur Groq: ${response.statusText}`);
     }
 
     const data = await response.json();

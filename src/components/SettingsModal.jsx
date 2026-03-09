@@ -1,5 +1,11 @@
-import React, { memo, useCallback } from 'react';
+import React, { memo, useCallback, useState } from 'react';
 import { Settings, X, FileText, Info } from 'lucide-react';
+
+const GEMINI_MODELS = [
+  { value: 'gemini-2.5-flash', label: '⚡ Gemini 2.5 Flash (Rapide, défaut)' },
+  { value: 'gemini-3.0-flash', label: '🚀 Gemini 3.0 Flash (Ultra-rapide)' },
+  { value: 'custom', label: '✏️ Autre modèle...' },
+];
 
 const SettingsModal = memo(({
   show,
@@ -11,15 +17,29 @@ const SettingsModal = memo(({
   pdfJustify,
   setPdfJustify,
   transcriptionEngine,
-  _setTranscriptionEngine,
+  setTranscriptionEngine,
   whisperUrl,
-  setWhisperUrl
+  setWhisperUrl,
+  groqApiKey,
+  setGroqApiKey
 }) => {
   if (!show) return null;
+
+  const isKnownModel = GEMINI_MODELS.some(m => m.value !== 'custom' && m.value === aiModel);
+  const selectValue = isKnownModel ? aiModel : 'custom';
+
+  const handleSelectChange = (e) => {
+    const val = e.target.value;
+    if (val !== 'custom') setAiModel(val);
+    else setAiModel('');
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-lg w-full transform transition-all border border-gray-100 dark:border-gray-700 overflow-y-auto max-h-[90vh]">
+        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 rounded-lg text-[10px] text-blue-700 dark:text-blue-300">
+           💡 <strong>Note :</strong> Groq est utilisé exclusivement pour la <u>transcription</u> (voix vers texte). La <u>traduction</u> et l'<u>analyse</u> utilisent toujours Gemini.
+        </div>
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
             <Settings className="w-5 h-5 text-gray-600 dark:text-gray-400" />
@@ -29,6 +49,29 @@ const SettingsModal = memo(({
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
+
+        {/* Optional Groq Configuration */}
+        {transcriptionEngine === 'groq' && (
+          <div className="mb-6 pb-6 border-b border-gray-100 dark:border-gray-700 animate-in fade-in slide-in-from-top-2 duration-200">
+            <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-zap text-orange-500"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+              Configuration Groq Cloud
+            </h3>
+            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+              Clé API Groq
+            </label>
+            <input
+              type="password"
+              value={groqApiKey}
+              onChange={(e) => setGroqApiKey(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              placeholder="gsk_..."
+            />
+            <p className="mt-1 text-[10px] text-gray-500">
+              Obtenez une clé sur <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="text-orange-500 hover:underline">console.groq.com</a>
+            </p>
+          </div>
+        )}
 
         {/* Optional Whisper Configuration */}
         {transcriptionEngine === 'whisper' && (
@@ -68,20 +111,29 @@ const SettingsModal = memo(({
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             Modèle Gemini (Cloud) <span className="text-red-500">*</span>
           </label>
-          <input
-            type="text"
-            value={aiModel}
-            onChange={(e) => setAiModel(e.target.value)}
-            className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${!aiModel ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
-            placeholder="Entrez le nom du modèle Gemini"
-          />
+          <select
+            value={selectValue}
+            onChange={handleSelectChange}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+          >
+            {GEMINI_MODELS.map(m => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+          {selectValue === 'custom' && (
+            <input
+              type="text"
+              value={aiModel}
+              onChange={(e) => setAiModel(e.target.value)}
+              className={`mt-2 w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${!aiModel ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
+              placeholder="Ex: gemini-1.5-pro"
+            />
+          )}
           {!aiModel && (
-            <p className="text-xs text-red-500 mt-1">
-              ⚠️ Ce champ est obligatoire
-            </p>
+            <p className="text-xs text-red-500 mt-1">⚠️ Ce champ est obligatoire</p>
           )}
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            Utilisé pour l'Analyse IA et la Traduction.
+            Utilisé pour l'Analyse IA et la Traduction. Modèle actif : <span className="font-mono font-bold">{aiModel || '—'}</span>
           </p>
         </div>
         <div className="mb-4">
