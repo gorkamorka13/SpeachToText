@@ -38,14 +38,22 @@ export const callGemini = async (modelName, contents, maxRetries = 3) => {
                     genAI = new GoogleGenAI({ apiKey });
                 }
 
+                const safetySettings = [
+                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                ];
+
                 if (typeof genAI.getGenerativeModel === 'function') {
-                    const model = genAI.getGenerativeModel({ model: modelName });
+                    const model = genAI.getGenerativeModel({ model: modelName, safetySettings });
                     const res = await model.generateContent({ contents });
                     return await res.response;
                 } else if (genAI.models && typeof genAI.models.generateContent === 'function') {
                     return await genAI.models.generateContent({
                         model: modelName,
-                        contents: contents
+                        contents: contents,
+                        safetySettings
                     });
                 } else {
                     throw new Error("Impossible de trouver une méthode d'appel valide dans le SDK Google GenAI.");
@@ -53,7 +61,7 @@ export const callGemini = async (modelName, contents, maxRetries = 3) => {
             })();
 
             const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Timeout : L'IA n'a pas répondu après 30 secondes.")), 30000)
+                setTimeout(() => reject(new Error("Timeout : L'IA n'a pas répondu après 5 minutes.")), 300000)
             );
 
             const result = await Promise.race([apiCall, timeoutPromise]);
@@ -86,8 +94,17 @@ export const extractTextFromResponse = (response) => {
         }
         if (typeof response.text === 'string') return response.text;
 
-        if (response.candidates && response.candidates[0]?.content?.parts) {
-            return response.candidates[0].content.parts.map(p => p.text || "").join('').trim();
+        if (response.candidates && response.candidates[0]) {
+            const cand = response.candidates[0];
+            if (cand.finishReason && cand.finishReason !== "STOP") {
+                console.warn(`[Gemini] Finish Reason: ${cand.finishReason}`);
+                if (cand.finishReason === "SAFETY") {
+                    throw new Error("Contenu bloqué par les filtres de sécurité de l'IA (SAFETY).");
+                }
+            }
+            if (cand.content?.parts) {
+                return cand.content.parts.map(p => p.text || "").join('').trim();
+            }
         }
         if (response.choices && response.choices[0]?.message?.content) {
             return response.choices[0].message.content;
@@ -153,24 +170,24 @@ export const fileToGenerativePart = async (blob) => {
     }
 
     // Diagnostics in console
-    console.log(`[Base64] Démarrage conversion: type=${blob.type}, taille=${(blob.size / 1024 / 1024).toFixed(2)} Mo`);
+    const sizeMo = (blob.size / 1024 / 1024).toFixed(2);
+    console.log(`[Base64] Démarrage conversion: type=${blob.type}, taille=${sizeMo} Mo`);
+
+    if (blob.size > 20 * 1024 * 1024) {
+        console.warn(`[Base64] Attention: Fichier volumineux (${sizeMo} Mo). Limite Gemini inlineData ~20MB.`);
+    }
 
     try {
-        const arrayBuffer = await blob.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-
-        let binary = '';
-        const chunk = 8192; // Chunk size to avoid stack overflow with apply
-        for (let i = 0; i < bytes.length; i += chunk) {
-            const part = bytes.subarray(i, i + chunk);
-            binary += String.fromCharCode.apply(null, part);
-        }
-
-        const base64Data = btoa(binary);
-
-        if (!base64Data || base64Data.length === 0) {
-            throw new Error("Résultat btoa vide.");
-        }
+        const base64Data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const base64String = reader.result.split(',')[1];
+                if (base64String) resolve(base64String);
+                else reject(new Error("Échec de l'extraction de la chaîne base64."));
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
 
         let finalMime = (blob.type || "audio/wav").split(';')[0];
         // Normalize video/webm to audio/webm if it's just an audio stream
@@ -188,7 +205,7 @@ export const fileToGenerativePart = async (blob) => {
         };
     } catch (e) {
         console.error("Conversion Error:", e);
-        throw new Error(`Échec conversion base64 (${(blob.size / 1024 / 1024).toFixed(1)} Mo) : ${e.message}`);
+        throw new Error(`Échec conversion base64 (${sizeMo} Mo) : ${e.message}`);
     }
 };
 

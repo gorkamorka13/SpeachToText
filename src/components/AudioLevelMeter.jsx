@@ -1,4 +1,5 @@
 import React, { memo, useMemo } from 'react';
+import PropTypes from 'prop-types';
 
 const AudioLevelMeter = memo(({ volumeLevel }) => {
   const percentage = useMemo(() => Math.round((volumeLevel / 128) * 100), [volumeLevel]);
@@ -35,5 +36,13 @@ const AudioLevelMeter = memo(({ volumeLevel }) => {
     </div>
   );
 });
+
+AudioLevelMeter.propTypes = {
+  volumeLevel: PropTypes.number,
+};
+
+AudioLevelMeter.defaultProps = {
+  volumeLevel: 0,
+};
 
 export default AudioLevelMeter;

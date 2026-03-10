@@ -206,10 +206,6 @@ export default function SpeechToTextApp() {
     }, [darkMode]);
 
     useEffect(() => {
-        localStorage.setItem('enableSystemAudio', enableSystemAudio);
-    }, [enableSystemAudio]);
-
-    useEffect(() => {
         localStorage.setItem('pdfJustify', pdfJustify);
     }, [pdfJustify]);
 
@@ -404,6 +400,9 @@ export default function SpeechToTextApp() {
                     return;
                 }
 
+                if (blobToUse.size > 20 * 1024 * 1024) {
+                    showNotification("⚠️ Fichier volumineux détecté (>20 Mo). La transcription peut prendre plusieurs minutes ou échouer si elle dépasse les limites de Gemini.");
+                }
                 showNotification("Transcription cloud (Gemini) en cours...");
 
                 // Convert WebM to WAV for Gemini compatibility if needed
@@ -1035,6 +1034,26 @@ Texte à analyser :
         showNotification("Fichier Audio téléchargé !");
     };
 
+    const downloadErrorLog = () => {
+        const logs = errorLogsRef.current;
+        if (!logs || logs.length === 0) return;
+
+        const content = logs.join('\n');
+        const blob = new Blob([content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        const sanitizedFilename = sanitizeFilename(customFilename.trim());
+        const fileName = sanitizedFilename
+            ? `${sanitizedFilename}-errors.log`
+            : `error-log-${new Date().toISOString().slice(0, 10)}.log`;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        showNotification("Fichier de logs téléchargé !");
+    };
 
     const downloadPDF = () => {
         const doc = generatePDF({

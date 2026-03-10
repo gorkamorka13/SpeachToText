@@ -1,5 +1,6 @@
 import React, { memo } from 'react';
 import { RefreshCw } from 'lucide-react';
+import PropTypes from 'prop-types';
 
 const TokenCounter = memo(({ tokenUsage, onReset }) => {
   return (
@@ -22,5 +23,22 @@ const TokenCounter = memo(({ tokenUsage, onReset }) => {
     </div>
   );
 });
+
+TokenCounter.propTypes = {
+  tokenUsage: PropTypes.shape({
+    lastPrompt: PropTypes.number,
+    lastResponse: PropTypes.number,
+    totalSession: PropTypes.number,
+  }),
+  onReset: PropTypes.func.isRequired,
+};
+
+TokenCounter.defaultProps = {
+  tokenUsage: {
+    lastPrompt: 0,
+    lastResponse: 0,
+    totalSession: 0,
+  },
+};
 
 export default TokenCounter;
