@@ -59,7 +59,7 @@ export default function SpeechToTextApp() {
 5) supprimant les Carriage Return Line Feed et vérifie le texte,
 6) supprimant les phrases en anglais si ls transcription s'effectue depuis le français (phrases de plus d'un mot),
 7) identifiant des paragraphes dans ce texte,
-8) mettant enfin en forme et produit le fichier texte brut`
+8) mettant enfin en forme et produit le fichier texte brut, pas une synthèse`
         );
     });
     const [aiModel, setAiModel] = useState(() => {
