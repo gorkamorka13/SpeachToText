@@ -9,9 +9,10 @@ import EmailModal from './components/EmailModal';
 import TokenCounter from './components/TokenCounter';
 import AudioLevelMeter from './components/AudioLevelMeter';
 import VersionInfo from './components/VersionInfo';
+import WhisperHelpModal from './components/WhisperHelpModal';
 
 // Services & Utils
-import { callGemini, extractTextFromResponse, transcribeWithWhisper, transcribeWithGroq, fileToGenerativePart, translateWithGemini } from './services/aiService';
+import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
 import { trimSilence } from './utils/audioUtils';
 import { sanitizeInput, sanitizeFilename, validateFileType, escapeHtml } from './utils/securityUtils';
 import { generatePDF, downloadDOCX } from './services/exportService';
@@ -44,9 +45,7 @@ export default function SpeechToTextApp() {
     const [whisperUrl, setWhisperUrl] = useState(() => {
         return localStorage.getItem('whisperUrl') || 'http://localhost:5000/transcribe';
     });
-    const [groqApiKey, setGroqApiKey] = useState(() => {
-        return localStorage.getItem('groqApiKey') || import.meta.env.VITE_GROQ_API_KEY || '';
-    });
+    const [showWhisperHelp, setShowWhisperHelp] = useState(false);
     const [autoAnalyze, setAutoAnalyze] = useState(true);
     const [aiInstructions, setAiInstructions] = useState(() => {
         return (
@@ -273,10 +272,6 @@ export default function SpeechToTextApp() {
     }, [whisperUrl]);
 
     useEffect(() => {
-        localStorage.setItem('groqApiKey', groqApiKey);
-    }, [groqApiKey]);
-
-    useEffect(() => {
         localStorage.setItem('enableTranslation', enableTranslation);
     }, [enableTranslation]);
 
@@ -388,9 +383,6 @@ export default function SpeechToTextApp() {
             if (transcriptionEngine === 'whisper') {
                 showNotification("Transcription locale (Whisper) en cours...");
                 text = await transcribeWithWhisper(blobToUse, whisperUrl);
-            } else if (transcriptionEngine === 'groq') {
-                showNotification("Transcription cloud (Groq Whisper) en cours...");
-                text = await transcribeWithGroq(blobToUse, groqApiKey);
             } else {
                 // Check if AI model is configured for Gemini transcription
                 if (!aiModel) {
@@ -448,8 +440,12 @@ export default function SpeechToTextApp() {
 
             if (text) {
                 setTranscript(text);
+                setIsTranscribing(false);
 
                 if (autoAnalyze) {
+                    // ✅ Laisser React rendre le transcript à l'écran AVANT de lancer l'IA
+                    // (un tick suffit pour que le batch de rendu s'exécute)
+                    await new Promise(resolve => setTimeout(resolve, 50));
                     showNotification("Transcription terminée ! Analyse IA en cours...");
                     await processWithAI(text);
                 } else {
@@ -476,6 +472,8 @@ export default function SpeechToTextApp() {
                 finalizeAutoSave(null);
             }
         } finally {
+            // setIsTranscribing est déjà false si autoAnalyze était true (mis à false avant processWithAI)
+            // On le force false ici pour couvrir les autres cas (erreur, pas de texte, autoAnalyze=false)
             setIsTranscribing(false);
             if (!isAutoSavingRef.current) setIsProcessingAI(false);
         }
@@ -1152,9 +1150,14 @@ Texte à analyser :
 
     const clearTranscript = () => {
         setTranscript('');
+        setInterimTranscript('');
         setTranslatedTranscript('');
         setAudioBlob(null);
         setAiResult('');
+        setUploadedFile(null);
+        setDuration(0);
+        setCustomFilename('');
+        showNotification("Session effacée.");
     };
 
     const languages = useMemo(() => [
@@ -1249,27 +1252,14 @@ Texte à analyser :
                     <p className="text-gray-600 dark:text-gray-400 mb-6">Transcription et traduction en temps réel</p>
 
                     <div className="flex flex-col gap-4 mb-6">
-                        <div className="flex flex-col sm:flex-row items-center gap-3">
-                            {/* Translation Toggle - Now integrated in the same row */}
-                            <div className="flex items-center gap-2 bg-white dark:bg-gray-700 px-3 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 shadow-sm transition-colors h-[46px] sm:h-[50px]">
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                    <span className={`text-sm font-medium whitespace-nowrap ${enableTranslation ? 'text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-gray-400'}`}>
-                                        Traduction
-                                    </span>
-                                    <div className="relative inline-flex items-center cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            className="sr-only peer"
-                                            checked={enableTranslation}
-                                            onChange={(e) => setEnableTranslation(e.target.checked)}
-                                        />
-                                        <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 dark:peer-focus:ring-purple-900 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-                                    </div>
-                                </label>
-                            </div>
+                        {/* Section Transcription */}
+                        <div className="flex flex-col sm:flex-row items-center gap-4 bg-gray-50/50 dark:bg-gray-800/30 p-3 rounded-xl border border-gray-100 dark:border-gray-700">
+                            <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 min-w-max hidden sm:block">
+                                🎙️ Transcription :
+                            </span>
 
                             {/* Transcription Engine Selector */}
-                            <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg self-start sm:self-auto h-[46px] sm:h-[50px]">
+                            <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg self-start sm:self-auto h-[46px] sm:h-[50px] flex-shrink-0">
                                 <button
                                     onClick={() => !isListening && setTranscriptionEngine('google')}
                                     disabled={isListening}
@@ -1282,18 +1272,12 @@ Texte à analyser :
                                     Gemini
                                 </button>
                                 <button
-                                    onClick={() => !isListening && setTranscriptionEngine('groq')}
-                                    disabled={isListening}
-                                    title="Utilise Whisper Cloud via Groq (Ultra-rapide)"
-                                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${transcriptionEngine === 'groq'
-                                        ? 'bg-white dark:bg-gray-600 text-orange-600 dark:text-orange-400 shadow-sm'
-                                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
-                                >
-                                    Groq
-                                </button>
-                                <button
-                                    onClick={() => !isListening && setTranscriptionEngine('whisper')}
+                                    onClick={() => {
+                                        if (!isListening) {
+                                            setTranscriptionEngine('whisper');
+                                            setShowWhisperHelp(true);
+                                        }
+                                    }}
                                     disabled={isListening}
                                     title="Utilise Whisper en local (nécessite le serveur python lancé)"
                                     className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${transcriptionEngine === 'whisper'
@@ -1303,27 +1287,65 @@ Texte à analyser :
                                 >
                                     Local
                                 </button>
+
+                                {/* Info button for Whisper Help (always visible when whisper selected) */}
+                                {transcriptionEngine === 'whisper' && (
+                                    <button
+                                        onClick={() => setShowWhisperHelp(true)}
+                                        title="Comment lancer le serveur local ?"
+                                        className="p-1 rounded-full text-purple-400 hover:text-purple-600 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 transition-colors flex-shrink-0"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                    </button>
+                                )}
                             </div>
 
-                            <LanguageSelector
-                                value={language}
-                                onChange={setLanguage}
-                                languages={languages}
-                                disabled={isListening}
-                            />
+                            {/* Source Language */}
+                            <div className="flex-1 w-full sm:w-auto">
+                                <LanguageSelector
+                                    value={language}
+                                    onChange={setLanguage}
+                                    languages={languages}
+                                    disabled={isListening}
+                                />
+                            </div>
+                        </div>
 
+                        {/* Section Traduction */}
+                        <div className="flex flex-col sm:flex-row items-center gap-4 bg-purple-50/30 dark:bg-purple-900/10 p-3 rounded-xl border border-purple-100 dark:border-purple-800/30">
+                            <span className="text-sm font-semibold text-purple-700 dark:text-purple-300 min-w-max hidden sm:block">
+                                🌍 Traduction :
+                            </span>
+
+                            {/* Translation Toggle */}
+                            <div className="flex items-center gap-2 bg-white dark:bg-gray-700 px-3 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 shadow-sm transition-colors h-[46px] sm:h-[50px] w-full sm:w-auto self-start sm:self-auto justify-between sm:justify-start flex-shrink-0">
+                                <span className={`text-sm font-medium whitespace-nowrap ${enableTranslation ? 'text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                                    Activer
+                                </span>
+                                <label className="relative inline-flex items-center cursor-pointer ml-auto sm:ml-2">
+                                    <input
+                                        type="checkbox"
+                                        className="sr-only peer"
+                                        checked={enableTranslation}
+                                        onChange={(e) => setEnableTranslation(e.target.checked)}
+                                    />
+                                    <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 dark:peer-focus:ring-purple-900 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                </label>
+                            </div>
+
+                            {/* Target Language */}
                             {enableTranslation && (
                                 <>
                                     <div className="hidden sm:flex items-center justify-center text-gray-400 px-1">
-                                        <Languages className="w-5 h-5" />
+                                        <Languages className="w-5 h-5 flex-shrink-0" />
                                     </div>
-
-                                    <LanguageSelector
-                                        value={targetLanguage}
-                                        onChange={setTargetLanguage}
-                                        languages={languages}
-                                        className="flex-1 w-full sm:w-auto"
-                                    />
+                                    <div className="flex-1 w-full sm:w-auto">
+                                        <LanguageSelector
+                                            value={targetLanguage}
+                                            onChange={setTargetLanguage}
+                                            languages={languages}
+                                        />
+                                    </div>
                                 </>
                             )}
                         </div>
@@ -1912,8 +1934,12 @@ Texte à analyser :
                 setTranscriptionEngine={setTranscriptionEngine}
                 whisperUrl={whisperUrl}
                 setWhisperUrl={setWhisperUrl}
-                groqApiKey={groqApiKey}
-                setGroqApiKey={setGroqApiKey}
+            />
+
+            {/* Whisper Local Help Modal */}
+            <WhisperHelpModal
+                show={showWhisperHelp}
+                onClose={() => setShowWhisperHelp(false)}
             />
 
             <SuccessModal

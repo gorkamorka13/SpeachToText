@@ -133,34 +133,6 @@ export const transcribeWithWhisper = async (blob, url = 'http://localhost:5000/t
     return data.text;
 };
 
-export const transcribeWithGroq = async (blob, apiKey) => {
-    const finalApiKey = apiKey || import.meta.env.VITE_GROQ_API_KEY;
-    if (!finalApiKey || finalApiKey === 'YOUR_GROQ_API_KEY_HERE') {
-        throw new Error("Clé API Groq manquante. Veuillez la configurer dans les paramètres ou le fichier .env.");
-    }
-
-    const formData = new FormData();
-    formData.append('file', blob, 'recording.wav');
-    formData.append('model', 'whisper-large-v3-turbo');
-    formData.append('response_format', 'json');
-
-    const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${finalApiKey}`
-        },
-        body: formData
-    });
-
-    if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || `Erreur Groq: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.text;
-};
-
 export const fileToGenerativePart = async (blob) => {
     if (!(blob instanceof Blob)) {
         throw new Error("L'entrée n'est pas un Blob audio valide.");
