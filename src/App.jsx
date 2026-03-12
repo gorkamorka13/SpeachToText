@@ -10,6 +10,7 @@ import TokenCounter from './components/TokenCounter';
 import AudioLevelMeter from './components/AudioLevelMeter';
 import VersionInfo from './components/VersionInfo';
 import WhisperHelpModal from './components/WhisperHelpModal';
+import AiErrorModal from './components/AiErrorModal';
 
 // Services & Utils
 import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
@@ -88,6 +89,10 @@ export default function SpeechToTextApp() {
     });
     const [speakingSection, setSpeakingSection] = useState(null);
     const [errorLogs, setErrorLogs] = useState([]);
+    const [transcriptionTime, setTranscriptionTime] = useState(0);
+    const [aiProcessingTime, setAiProcessingTime] = useState(0);
+    const [showAiError, setShowAiError] = useState(false);
+    const [aiErrorContent, setAiErrorContent] = useState('');
 
     // Custom hooks
     const { notification, showNotification } = useNotification();
@@ -142,6 +147,10 @@ export default function SpeechToTextApp() {
     const transcriptTextareaRef = useRef(null);
     const aiTextareaRef = useRef(null);
     const translationAreaRef = useRef(null);
+
+    // Refs for timer intervals
+    const transcriptionIntervalRef = useRef(null);
+    const aiProcessingIntervalRef = useRef(null);
 
     // Auto-resize effect
     useEffect(() => {
@@ -375,6 +384,15 @@ export default function SpeechToTextApp() {
         }
 
         setIsTranscribing(true);
+        setTranscriptionTime(0); // Reset timer
+        const startTime = Date.now();
+
+        // Timer interval to update UI
+        if (transcriptionIntervalRef.current) clearInterval(transcriptionIntervalRef.current);
+        transcriptionIntervalRef.current = setInterval(() => {
+            setTranscriptionTime(Math.floor((Date.now() - startTime) / 1000));
+        }, 1000);
+
         if (!isAutoSavingRef.current) setAiResult('');
 
         try {
@@ -440,6 +458,11 @@ export default function SpeechToTextApp() {
 
             if (text) {
                 setTranscript(text);
+                // ✅ Arrêter le timer de transcription IMMÉDIATEMENT dès qu'on a le texte
+                if (transcriptionIntervalRef.current) {
+                    clearInterval(transcriptionIntervalRef.current);
+                    transcriptionIntervalRef.current = null;
+                }
                 setIsTranscribing(false);
 
                 if (autoAnalyze) {
@@ -472,8 +495,10 @@ export default function SpeechToTextApp() {
                 finalizeAutoSave(null);
             }
         } finally {
-            // setIsTranscribing est déjà false si autoAnalyze était true (mis à false avant processWithAI)
-            // On le force false ici pour couvrir les autres cas (erreur, pas de texte, autoAnalyze=false)
+            if (transcriptionIntervalRef.current) {
+                clearInterval(transcriptionIntervalRef.current);
+                transcriptionIntervalRef.current = null;
+            }
             setIsTranscribing(false);
             if (!isAutoSavingRef.current) setIsProcessingAI(false);
         }
@@ -502,6 +527,14 @@ export default function SpeechToTextApp() {
         }
 
         setIsProcessingAI(true);
+        setAiProcessingTime(0); // Reset timer
+        const startTime = Date.now();
+
+        if (aiProcessingIntervalRef.current) clearInterval(aiProcessingIntervalRef.current);
+        aiProcessingIntervalRef.current = setInterval(() => {
+            setAiProcessingTime(Math.floor((Date.now() - startTime) / 1000));
+        }, 1000);
+
         setAiResult('');
         showNotification(`Analyse IA (${aiModel}) en cours...`);
 
@@ -537,7 +570,7 @@ Texte à analyser :
 
             if (!text) {
                 // console.log("Full response object:", response); // Removed to cleaner logs
-                throw new Error("Réponse vide de l'IA ou bloquée par les filtres de sécurité.");
+                throw new Error("L'IA n'a pas renvoyé de réponse exploitable. Vérifiez vos instructions ou essayez un autre modèle.");
             }
 
             setAiResult(text);
@@ -549,12 +582,22 @@ Texte à analyser :
 
         } catch (error) {
             logError(error, "Analyse IA");
-            setAiResult(`Erreur lors de l'analyse IA : ${error.message || "Erreur inconnue"}`);
-            // If failed, still try to save what we have
+            const errorMsg = error.message || "Erreur inconnue";
+            setAiResult(`⚠️ Échec de l'analyse IA : ${errorMsg}`);
+            
+            // Afficher le modal d'erreur IA
+            setAiErrorContent(errorMsg);
+            setShowAiError(true);
+
+            // If failed, still try to save what we have (Whisper result is still in 'transcript')
             if (isAutoSavingRef.current) {
                 finalizeAutoSave(null);
             }
         } finally {
+            if (aiProcessingIntervalRef.current) {
+                clearInterval(aiProcessingIntervalRef.current);
+                aiProcessingIntervalRef.current = null;
+            }
             setIsProcessingAI(false);
         }
     };
@@ -1156,6 +1199,8 @@ Texte à analyser :
         setAiResult('');
         setUploadedFile(null);
         setDuration(0);
+        setTranscriptionTime(0);
+        setAiProcessingTime(0);
         setCustomFilename('');
         showNotification("Session effacée.");
     };
@@ -1585,13 +1630,23 @@ Texte à analyser :
                                         </span>
                                     </div>
                                 )}
-                                <div className="flex-1 flex flex-col">
-                                    {isTranscribing ? (
-                                        <div className="flex items-center gap-2 text-purple-400 italic py-2">
-                                            <div className="animate-spin h-4 w-4 border-2 border-purple-500 border-t-transparent rounded-full"></div>
-                                            Transcription en cours...
+                                <div className="flex-1 flex flex-col relative">
+                                    {isTranscribing && (
+                                        <div className="absolute inset-0 bg-white/60 dark:bg-gray-800/60 z-10 flex items-center justify-center backdrop-blur-[1px] rounded-lg">
+                                            <div className="flex flex-col items-center gap-2 text-purple-600 dark:text-purple-400 font-bold bg-white dark:bg-gray-800 p-4 rounded-xl shadow-lg border border-purple-100 dark:border-purple-900/50">
+                                                <div className="animate-spin h-6 w-6 border-4 border-purple-500 border-t-transparent rounded-full"></div>
+                                                <span className="text-sm">Transcription : {formatDuration(transcriptionTime)}</span>
+                                            </div>
                                         </div>
-                                    ) : isListening ? (
+                                    )}
+
+                                    {transcriptionTime > 0 && !isListening && (
+                                        <div className="text-[10px] text-gray-400 mb-2 italic">
+                                            Transcrit en {formatDuration(transcriptionTime)}
+                                        </div>
+                                    )}
+                                    
+                                    {isListening ? (
                                         <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-sans text-base">
                                             {!transcript && !interimTranscript && <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
                                             {transcript}
@@ -1723,29 +1778,35 @@ Texte à analyser :
                     </div>
 
                     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 min-h-[80px] h-auto border border-gray-100 dark:border-gray-700 relative mb-4 transition-all duration-300">
-                        {isProcessingAI ? (
-                            <div className="flex items-center gap-2 text-purple-400 italic">
-                                <div className="animate-spin h-4 w-4 border-2 border-purple-500 border-t-transparent rounded-full"></div>
-                                Analyse en cours...
-                            </div>
-                        ) : (
-                            <div className="flex-1 flex flex-col">
-                                {!aiResult ? (
-                                    <span className="text-purple-300 dark:text-purple-500/50 italic">Cliquez sur "Analyser avec IA" pour voir le résultat...</span>
-                                ) : (
-                                    <textarea
-                                        ref={aiTextareaRef}
-                                        value={aiResult}
-                                        onChange={(e) => setAiResult(e.target.value)}
-                                        className={`w-full bg-white/50 dark:bg-gray-800/50 p-3 border border-purple-200/50 dark:border-purple-800/50 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed font-mono text-sm transition-all max-h-[260px] ${aiResult ? 'overflow-y-auto' : 'overflow-hidden'}`}
-                                        placeholder="Le résultat s'affichera ici..."
-                                        rows={1}
-                                    />
-                                )}
-                            </div>
-                        )}
+                        <div className="flex-1 flex flex-col relative">
+                            {isProcessingAI && (
+                                <div className="absolute inset-0 bg-white/60 dark:bg-gray-800/60 z-10 flex items-center justify-center backdrop-blur-[1px] rounded-lg">
+                                    <div className="flex flex-col items-center gap-2 text-blue-600 dark:text-blue-400 font-bold bg-white dark:bg-gray-800 p-4 rounded-xl shadow-lg border border-blue-100 dark:border-blue-900/50">
+                                        <div className="animate-spin h-6 w-6 border-4 border-blue-500 border-t-transparent rounded-full"></div>
+                                        <span className="text-sm">Analyse IA : {formatDuration(aiProcessingTime)}</span>
+                                    </div>
+                                </div>
+                            )}
 
+                            {aiProcessingTime > 0 && (
+                                <div className="text-[10px] text-purple-400 mb-2 italic px-1">
+                                    Analysé en {formatDuration(aiProcessingTime)}
+                                </div>
+                            )}
 
+                            {!aiResult && !isProcessingAI ? (
+                                <span className="text-purple-300 dark:text-purple-500/50 italic py-3">Cliquez sur "Analyser avec IA" pour voir le résultat...</span>
+                            ) : (
+                                <textarea
+                                    ref={aiTextareaRef}
+                                    value={aiResult}
+                                    onChange={(e) => setAiResult(e.target.value)}
+                                    className={`w-full bg-white/50 dark:bg-gray-800/50 p-3 border border-purple-200/50 dark:border-purple-800/50 rounded-lg resize-none focus:ring-2 focus:ring-purple-400 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed font-mono text-sm transition-all max-h-[260px] ${aiResult ? 'overflow-y-auto' : 'overflow-hidden'}`}
+                                    placeholder="Le résultat s'affichera ici..."
+                                    rows={1}
+                                />
+                            )}
+                        </div>
                     </div>
 
                     <div className="mb-6 flex flex-col sm:flex-row items-end gap-4 bg-gray-50/50 dark:bg-gray-900/20 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
@@ -1940,6 +2001,13 @@ Texte à analyser :
             <WhisperHelpModal
                 show={showWhisperHelp}
                 onClose={() => setShowWhisperHelp(false)}
+            />
+
+            <AiErrorModal
+                show={showAiError}
+                onClose={() => setShowAiError(false)}
+                error={aiErrorContent}
+                transcriptSnippet={transcript.substring(0, 100)}
             />
 
             <SuccessModal
