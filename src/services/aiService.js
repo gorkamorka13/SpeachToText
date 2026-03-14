@@ -2,6 +2,18 @@ import { GoogleGenAI } from "@google/genai";
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
+let lastCallTime = 0;
+const MIN_CALL_INTERVAL = 1000;
+
+const rateLimiter = async () => {
+  const now = Date.now();
+  const timeSinceLastCall = now - lastCallTime;
+  if (timeSinceLastCall < MIN_CALL_INTERVAL) {
+    await delay(MIN_CALL_INTERVAL - timeSinceLastCall);
+  }
+  lastCallTime = Date.now();
+};
+
 export const callGemini = async (modelName, contents, maxRetries = 3) => {
     // 1. Payload Size Check (Gemini inlineData limit is 20MB)
     let totalBinarySize = 0;
@@ -18,6 +30,8 @@ export const callGemini = async (modelName, contents, maxRetries = 3) => {
 
     const sizeMo = (totalBinarySize / 1024 / 1024).toFixed(1);
     console.log(`[Gemini] Taille de la charge utile : ${sizeMo} Mo`);
+
+    await rateLimiter();
 
     let attempt = 0;
     while (attempt <= maxRetries) {
@@ -61,7 +75,7 @@ export const callGemini = async (modelName, contents, maxRetries = 3) => {
             })();
 
             const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Timeout : L'IA n'a pas répondu après 5 minutes.")), 300000)
+                setTimeout(() => reject(new Error("Timeout : L'IA n'a pas répondu après 2 minutes.")), 120000)
             );
 
             const result = await Promise.race([apiCall, timeoutPromise]);

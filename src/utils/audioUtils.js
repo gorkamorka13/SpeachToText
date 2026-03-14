@@ -1,8 +1,10 @@
-export const trimSilence = async (audioBlob) => {
+export const trimSilence = async (audioBlob, audioContext = null) => {
+    const shouldCloseContext = audioContext === null;
+    const context = audioContext || new (window.AudioContext || window.webkitAudioContext)();
+    
     try {
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const arrayBuffer = await audioBlob.arrayBuffer();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        const audioBuffer = await context.decodeAudioData(arrayBuffer);
 
         const channelData = audioBuffer.getChannelData(0);
         const sampleRate = audioBuffer.sampleRate;
@@ -34,6 +36,10 @@ export const trimSilence = async (audioBlob) => {
     } catch (e) {
         console.error("Trim Silence error:", e);
         return audioBlob;
+    } finally {
+        if (shouldCloseContext && context.state !== 'closed') {
+            context.close().catch(() => {});
+        }
     }
 };
 

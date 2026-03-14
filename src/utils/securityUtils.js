@@ -58,3 +58,32 @@ export const escapeHtml = (text) => {
   div.textContent = text;
   return div.innerHTML;
 };
+
+/**
+ * Sanitize AI instructions to prevent prompt injection
+ * Removes potentially dangerous patterns while preserving legitimate instructions
+ */
+export const sanitizeAIInstructions = (instructions) => {
+  if (!instructions || typeof instructions !== 'string') return '';
+  
+  let sanitized = DOMPurify.sanitize(instructions, {
+    ALLOWED_TAGS: [],
+    ALLOWED_ATTR: [],
+    KEEP_CONTENT: true
+  });
+  
+  const dangerousPatterns = [
+    /ignore\s+(previous|all|above)\s+(instructions?|rules?|prompt)/gi,
+    /forget\s+(everything|all|your)/gi,
+    /system\s*:\s*/gi,
+    /assistant\s*:\s*/gi,
+    /<\|/g,
+    /\|>/g,
+  ];
+  
+  dangerousPatterns.forEach(pattern => {
+    sanitized = sanitized.replace(pattern, '[FILTERED]');
+  });
+  
+  return sanitized.trim().slice(0, 5000);
+};

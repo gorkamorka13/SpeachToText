@@ -15,7 +15,7 @@ import AiErrorModal from './components/AiErrorModal';
 // Services & Utils
 import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
 import { trimSilence } from './utils/audioUtils';
-import { sanitizeInput, sanitizeFilename, validateFileType, escapeHtml } from './utils/securityUtils';
+import { sanitizeInput, sanitizeFilename, validateFileType, escapeHtml, sanitizeAIInstructions } from './utils/securityUtils';
 import { generatePDF, downloadDOCX } from './services/exportService';
 
 // Hooks
@@ -222,38 +222,42 @@ export default function SpeechToTextApp() {
         let errorMessage = error;
         let details = "";
 
-        // Handle Error objects
+        const sanitizeForLog = (msg) => {
+            if (typeof msg !== 'string') return msg;
+            return msg
+                .replace(/(apiKey|token|secret|password)[=:]\s*["']?[\w-]+["']?/gi, '$1=[FILTERED]')
+                .replace(/(AIzaSy[A-Za-z0-9_-]{20,})/g, '[API_KEY_MASKED]')
+                .slice(0, 500);
+        };
+
         if (error instanceof Error) {
-            errorMessage = error.message;
-            if (error.stack) details = error.stack;
+            errorMessage = sanitizeForLog(error.message);
+            if (error.stack) details = '[STACK_TRACE]';
         }
-        // Handle object errors (often from API)
         else if (typeof error === 'object') {
             try {
-                errorMessage = JSON.stringify(error);
-                // Try to extract readable message from common API error formats
-                if (error.message) errorMessage = error.message;
-                if (error.error && error.error.message) errorMessage = error.error.message;
+                errorMessage = sanitizeForLog(JSON.stringify(error));
+                if (error.message) errorMessage = sanitizeForLog(error.message);
+                if (error.error && error.error.message) errorMessage = sanitizeForLog(error.error.message);
             } catch (e) {
                 errorMessage = "Objet erreur non parsable";
             }
         }
 
-        // Clean up common JSON error strings
         if (typeof errorMessage === 'string' && errorMessage.startsWith('{"error":')) {
             try {
                 const parsed = JSON.parse(errorMessage);
                 if (parsed.error && parsed.error.message) {
-                    errorMessage = `${parsed.error.code ? `[${parsed.error.code}] ` : ''}${parsed.error.message}`;
+                    errorMessage = `${parsed.error.code ? `[${parsed.error.code}] ` : ''}${sanitizeForLog(parsed.error.message)}`;
                     if (parsed.error.status) errorMessage += ` (${parsed.error.status})`;
                 }
-            } catch (e) { /* ignore parse error */ }
+            } catch (e) { }
         }
 
         const logEntry = `[${timestamp}] ${context ? `[${context}] ` : ''}${errorMessage}`;
-        console.error("APP ERROR:", logEntry, details);
+        console.error("APP ERROR:", logEntry);
 
-        setErrorLogs(prev => [...prev, logEntry]);
+        setErrorLogs(prev => [...prev.slice(-49), logEntry]);
         showNotification(`Erreur${context ? ' ' + context : ''}: ${errorMessage.substring(0, 100)}${errorMessage.length > 100 ? '...' : ''}`);
     }, [showNotification]);
 
@@ -325,38 +329,56 @@ export default function SpeechToTextApp() {
         const searchLang = langCode || 'fr-FR';
         utterance.lang = searchLang;
 
-        // Advanced voice selection
-        const voices = window.speechSynthesis.getVoices();
-        if (voices.length > 0) {
-            // Priority 1: Exact match for the language code
-            let voice = voices.find(v => v.lang === searchLang);
+        const getVoices = () => window.speechSynthesis.getVoices();
+        let voices = getVoices();
+        
+        if (voices.length === 0) {
+            return new Promise((resolve) => {
+                window.speechSynthesis.onvoiceschanged = () => {
+                    voices = getVoices();
+                    applyVoice(voices, searchLang, utterance, section, resolve);
+                };
+                setTimeout(() => {
+                    voices = getVoices();
+                    applyVoice(voices, searchLang, utterance, section, () => {});
+                }, 100);
+            });
+        }
+        
+        applyVoice(voices, searchLang, utterance, section, () => {});
+    }, [speakingSection, showNotification]);
 
-            // Priority 2: Match by language prefix (e.g., any Arabic 'ar' voice)
-            if (!voice) {
-                const prefix = searchLang.split('-')[0];
-                voice = voices.find(v => v.lang.startsWith(prefix));
-            }
+    const applyVoice = (voices, searchLang, utterance, section, onComplete) => {
+        let voice = voices.find(v => v.lang === searchLang);
+        
+        if (!voice) {
+            const prefix = searchLang.split('-')[0];
+            voice = voices.find(v => v.lang.startsWith(prefix));
+        }
 
-            if (voice) {
-                utterance.voice = voice;
-                console.log(`TTS: Using voice ${voice.name} for ${searchLang}`);
-            } else {
-                console.warn(`TTS: No specific voice found for ${searchLang}. Using default.`);
-                if (searchLang.startsWith('ar')) {
-                    showNotification("Voix arabe non installée sur votre PC. La lecture sera en langue par défaut.");
-                }
+        if (voice) {
+            utterance.voice = voice;
+            console.log(`TTS: Using voice ${voice.name} for ${searchLang}`);
+        } else {
+            console.warn(`TTS: No specific voice found for ${searchLang}. Using default.`);
+            if (searchLang.startsWith('ar')) {
+                showNotification("Voix arabe non installée sur votre PC. La lecture sera en langue par défaut.");
             }
         }
 
-        utterance.onend = () => setSpeakingSection(null);
+        utterance.onend = () => {
+            setSpeakingSection(null);
+            if (onComplete) onComplete();
+        };
         utterance.onerror = () => {
             console.error("TTS Error");
             setSpeakingSection(null);
+            if (onComplete) onComplete();
         };
 
         setSpeakingSection(section);
         window.speechSynthesis.speak(utterance);
-    }, [speakingSection, showNotification]);
+    };
 
     const copyToClipboard = useCallback(async (text) => {
         if (!text) {
@@ -539,8 +561,7 @@ export default function SpeechToTextApp() {
         showNotification(`Analyse IA (${aiModel}) en cours...`);
 
         try {
-            // Sanitize instructions to prevent prompt injection
-            const sanitizedInstructions = sanitizeInput(aiInstructions);
+            const sanitizedInstructions = sanitizeAIInstructions(aiInstructions);
             const sanitizedText = sanitizeInput(textToAnalyze);
 
             const prompt = `
@@ -790,12 +811,12 @@ Texte à analyser :
 
 
 
-    const stopMediaTracks = () => {
+    const stopMediaTracks = useCallback(() => {
         streamsRef.current.forEach(stream => {
             stream.getTracks().forEach(track => track.stop());
         });
         streamsRef.current = [];
-    };
+    }, []);
 
     const detectSilence = () => {
         if (!analyserRef.current || !dataArrayRef.current) return;
