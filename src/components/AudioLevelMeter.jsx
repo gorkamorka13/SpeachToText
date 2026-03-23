@@ -1,7 +1,6 @@
 import React, { memo, useMemo } from 'react';
-import PropTypes from 'prop-types';
 
-const AudioLevelMeter = memo(({ volumeLevel }) => {
+const AudioLevelMeter = memo(({ volumeLevel = 0 }) => {
   const percentage = useMemo(() => Math.round((volumeLevel / 128) * 100), [volumeLevel]);
   return (
     <div className="w-full bg-gray-100 dark:bg-gray-700/50 rounded-lg p-3 border border-gray-200 dark:border-gray-600 animate-in fade-in zoom-in duration-300">
@@ -36,13 +35,5 @@ const AudioLevelMeter = memo(({ volumeLevel }) => {
     </div>
   );
 });
-
-AudioLevelMeter.propTypes = {
-  volumeLevel: PropTypes.number,
-};
-
-AudioLevelMeter.defaultProps = {
-  volumeLevel: 0,
-};
 
 export default AudioLevelMeter;

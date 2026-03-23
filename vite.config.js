@@ -67,5 +67,18 @@ export default defineConfig({
     __APP_BUILD_DATE__: JSON.stringify(versionInfo.buildDate),
     __APP_BUILD_DATE_FORMATTED__: JSON.stringify(versionInfo.buildDateFormatted),
     __APP_FULL_VERSION__: JSON.stringify(versionInfo.fullVersion),
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'jspdf': ['jspdf'],
+          'docx': ['docx'],
+          'ai-sdk': ['@google/genai'],
+          'react-vendor': ['react', 'react-dom'],
+          'lucide': ['lucide-react'],
+        }
+      }
+    }
   }
 });
