@@ -133,14 +133,28 @@ export const transcribeWithWhisper = async (blob, url = 'http://localhost:5000/t
     const formData = new FormData();
     formData.append('audio_file', blob, 'recording.wav');
 
-    const response = await fetch(url, {
-        method: 'POST',
-        body: formData
-    });
+    let response;
+    try {
+        response = await fetch(url, {
+            method: 'POST',
+            body: formData
+        });
+    } catch (error) {
+        if (error.message && error.message.includes('Failed to fetch')) {
+            throw new Error(`Le serveur Whisper local (${url}) est injoignable. Avez-vous pensé à lancer 'python whisper_server.py' dans un terminal ?`);
+        }
+        throw error;
+    }
 
     if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Erreur lors de la transcription Whisper");
+        let errorMsg = "Erreur lors de la transcription Whisper";
+        try {
+            const errorData = await response.json();
+            if (errorData.error) errorMsg = errorData.error;
+        } catch (e) {
+            errorMsg = `Erreur HTTP ${response.status} ${response.statusText}`;
+        }
+        throw new Error(errorMsg);
     }
 
     const data = await response.json();

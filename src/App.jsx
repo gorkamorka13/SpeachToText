@@ -870,6 +870,19 @@ Texte à analyser :
 
     const startRecording = async () => {
         try {
+            // Check Whisper Server before starting
+            if (transcriptionMode === 'post' && transcriptionEngine === 'whisper') {
+                try {
+                    const baseUrl = whisperUrl.split('/transcribe')[0];
+                    await fetch(baseUrl, { method: 'GET', mode: 'no-cors' });
+                } catch (e) {
+                    if (e.message && e.message.includes('Failed to fetch')) {
+                        const proceed = window.confirm("⚠️ Le serveur de transcription Python ne semble pas lancé.\nVeuillez lancer 'python whisper_server.py' dans votre terminal.\n\nVoulez-vous quand même enregistrer ?");
+                        if (!proceed) return;
+                    }
+                }
+            }
+
             // 1. Start Speech Recognition ONLY if in 'live' mode
             if (transcriptionMode === 'live') {
                 try {
