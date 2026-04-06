@@ -3,7 +3,7 @@ import { Settings, X, FileText, Info } from 'lucide-react';
 
 const GEMINI_MODELS = [
   { value: 'gemini-2.5-flash', label: '⚡ Gemini 2.5 Flash (Rapide, défaut)' },
-  { value: 'gemini-3.0-flash', label: '🚀 Gemini 3.0 Flash (Ultra-rapide)' },
+  { value: 'gemini-3.1-flash', label: '🚀 Gemini 3.1 Flash (Ultra-rapide)' },
   { value: 'custom', label: '✏️ Autre modèle...' },
 ];
 
