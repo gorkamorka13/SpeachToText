@@ -28,16 +28,19 @@ def transcribe():
 
     try:
         # Transcription avec vad_filter pour accélérer grandement en ignorant les silences
-        print("Début du traitement de l'audio...")
+        print("Début du traitement de l'audio...", flush=True)
+        # Using a generator avoids loading all segments into memory before returning
         segments, info = model.transcribe(temp_path, beam_size=2, vad_filter=True)
+
+        print(f"Langue détectée: {info.language} ({info.language_probability:.2f})", flush=True)
 
         full_text = ""
         for segment in segments:
             full_text += segment.text + " "
             # Afficher l'avancement dans la console Python pour montrer que ce n'est pas bloqué
-            print(f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}")
+            print(f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}", flush=True)
 
-        print("Traitement terminé, envoi de la réponse au navigateur...")
+        print("Traitement terminé, envoi de la réponse au navigateur...", flush=True)
         return jsonify({
             "text": full_text.strip(),
             "language": info.language,
