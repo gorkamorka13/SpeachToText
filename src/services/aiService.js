@@ -137,7 +137,7 @@ export const transcribeWithWhisper = async (blob, url = 'http://localhost:5000/t
     formData.append('audio_file', blob, 'recording.wav');
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout
+    const timeoutId = setTimeout(() => controller.abort(), 1800000); // 30 min timeout
 
     let response;
     try {
@@ -150,7 +150,7 @@ export const transcribeWithWhisper = async (blob, url = 'http://localhost:5000/t
         clearTimeout(timeoutId);
         console.error(`[Whisper] Fetch error:`, error);
         if (error.name === 'AbortError') {
-            throw new Error("Timeout: La transcription Whisper a pris trop de temps (> 5 minutes).");
+            throw new Error("Timeout: La transcription Whisper a pris trop de temps (> 30 minutes). Le fichier est très volumineux ou la machine est trop lente.");
         }
         if (error.message && error.message.includes('Failed to fetch')) {
             throw new Error(`Le serveur Whisper local (${url}) est injoignable. Avez-vous lancé 'python whisper_server.py' ?`);
