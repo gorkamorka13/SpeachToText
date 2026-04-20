@@ -51,15 +51,18 @@ export default function SpeechToTextApp() {
     const [aiInstructions, setAiInstructions] = useState(() => {
         return (
           localStorage.getItem("aiInstructions") ||
-          `Corrige ce texte en:
-1) vérifiant l'orthographe,
-2) supprimant les espaces manquants entre les mots,
-3) supprimant les sauts de lignes inutiles,
-4) supprimant les retours à la ligne inutiles,
-5) supprimant les Carriage Return Line Feed et vérifie le texte,
-6) supprimant les phrases en anglais si ls transcription s'effectue depuis le français (phrases de plus d'un mot),
-7) identifiant des paragraphes dans ce texte,
-8) mettant enfin en forme et produit le fichier texte complet et intégral, pas une synthèse ni un résumé`
+          `Instructions pour le traitement de texte intégral :
+
+Agis en tant qu'éditeur professionnel et expert en transcription. Je vais te fournir un texte brut (souvent issu d'une reconnaissance vocale).
+Ton objectif est de produire une version propre, lisible et intégrale en respectant strictement les 8 règles suivantes :
+    Orthographe et Grammaire : Corrige toutes les fautes d'orthographe, de syntaxe et de conjugaison.
+    Rétablissement des mots : Supprime les espaces manquants entre les mots (recolle les mots qui ont été coupés par erreur).
+    Nettoyage des sauts de ligne : Supprime tous les sauts de ligne inutiles, les retours à la ligne intempestifs et les caractères de type "Carriage Return Line Feed" (CRLF) qui cassent les phrases.
+    Vérification du sens : Assure-toi que le texte reste fluide et cohérent par rapport au discours d'origine.
+    Filtrage linguistique : Si la transcription est en français, supprime toutes les phrases ou segments en anglais (de plus d'un mot), sauf s'il s'agit de noms propres ou de termes techniques essentiels.
+    Structuration : Identifie les thématiques pour créer des paragraphes logiques et aérés.
+    Intégrité absolue : Ne fais PAS de synthèse, PAS de résumé, et n'omets aucun détail. Je veux le texte complet, incluant les anecdotes, les exemples et les hésitations transformées en phrases correctes.
+    Mise en forme : Produis un fichier texte propre, prêt à être lu, sans commentaires superflus de ta part au début ou à la fin.`
         );
     });
     const [aiModel, setAiModel] = useState(() => {
