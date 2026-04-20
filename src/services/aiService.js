@@ -75,7 +75,7 @@ export const callGemini = async (modelName, contents, maxRetries = 3) => {
             })();
 
             const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Timeout : L'IA n'a pas répondu après 2 minutes.")), 120000)
+                setTimeout(() => reject(new Error("Timeout : L'IA n'a pas répondu après 5 minutes.")), 300000)
             );
 
             const result = await Promise.race([apiCall, timeoutPromise]);

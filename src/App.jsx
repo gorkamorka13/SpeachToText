@@ -62,7 +62,7 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
     Vérification du sens : Assure-toi que le texte reste fluide et cohérent par rapport au discours d'origine.
     Filtrage linguistique : Si la transcription est en français, supprime toutes les phrases ou segments en anglais (de plus d'un mot), sauf s'il s'agit de noms propres ou de termes techniques essentiels.
     Structuration : Identifie les thématiques pour créer des paragraphes logiques et aérés.
-    Intégrité absolue : Ne fais PAS de synthèse, PAS de résumé, et n'omets aucun mot. Je veux le texte complet, incluant tous mots du texte original.
+    Intégrité absolue : Ne fais PAS de synthèse, PAS de résumé, et n'omets aucun mot. Je veux le texte complet, incluant tous mots et toutes les phrases du texte original.
     Mise en forme : Produis un fichier texte propre, prêt à être lu, sans commentaires superflus de ta part au début ou à la fin.`
         );
     });
