@@ -59,7 +59,7 @@ export default function SpeechToTextApp() {
 5) supprimant les Carriage Return Line Feed et vérifie le texte,
 6) supprimant les phrases en anglais si ls transcription s'effectue depuis le français (phrases de plus d'un mot),
 7) identifiant des paragraphes dans ce texte,
-8) mettant enfin en forme et produit le fichier texte brut, pas une synthèse`
+8) mettant enfin en forme et produit le fichier texte complet et intégral, pas une synthèse ni un résumé`
         );
     });
     const [aiModel, setAiModel] = useState(() => {
@@ -331,7 +331,7 @@ export default function SpeechToTextApp() {
 
         const getVoices = () => window.speechSynthesis.getVoices();
         let voices = getVoices();
-        
+
         if (voices.length === 0) {
             return new Promise((resolve) => {
                 window.speechSynthesis.onvoiceschanged = () => {
@@ -344,13 +344,13 @@ export default function SpeechToTextApp() {
                 }, 100);
             });
         }
-        
+
         applyVoice(voices, searchLang, utterance, section, () => {});
     }, [speakingSection, showNotification]);
 
     const applyVoice = (voices, searchLang, utterance, section, onComplete) => {
         let voice = voices.find(v => v.lang === searchLang);
-        
+
         if (!voice) {
             const prefix = searchLang.split('-')[0];
             voice = voices.find(v => v.lang.startsWith(prefix));
@@ -605,7 +605,7 @@ Texte à analyser :
             logError(error, "Analyse IA");
             const errorMsg = error.message || "Erreur inconnue";
             setAiResult(`⚠️ Échec de l'analyse IA : ${errorMsg}`);
-            
+
             // Afficher le modal d'erreur IA
             setAiErrorContent(errorMsg);
             setShowAiError(true);
@@ -1679,7 +1679,7 @@ Texte à analyser :
                                             Transcrit en {formatDuration(transcriptionTime)}
                                         </div>
                                     )}
-                                    
+
                                     {isListening ? (
                                         <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed font-sans text-base">
                                             {!transcript && !interimTranscript && <span className="text-gray-400 italic">Le texte apparaîtra ici...</span>}
