@@ -53,7 +53,8 @@ export default function SpeechToTextApp() {
           localStorage.getItem("aiInstructions") ||
           `Instructions pour le traitement de texte intégral :
 
-Agis en tant qu'éditeur professionnel et expert en transcription. Je vais te fournir un texte brut (souvent issu d'une reconnaissance vocale).
+Agis en tant qu'éditeur professionnel et expert en transcription.
+Je vais te fournir un texte brut (souvent issu d'une reconnaissance vocale).
 Ton objectif est de produire une version propre, lisible et intégrale en respectant strictement les 8 règles suivantes :
     Orthographe et Grammaire : Corrige toutes les fautes d'orthographe, de syntaxe et de conjugaison.
     Rétablissement des mots : Supprime les espaces manquants entre les mots (recolle les mots qui ont été coupés par erreur).
@@ -61,7 +62,7 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
     Vérification du sens : Assure-toi que le texte reste fluide et cohérent par rapport au discours d'origine.
     Filtrage linguistique : Si la transcription est en français, supprime toutes les phrases ou segments en anglais (de plus d'un mot), sauf s'il s'agit de noms propres ou de termes techniques essentiels.
     Structuration : Identifie les thématiques pour créer des paragraphes logiques et aérés.
-    Intégrité absolue : Ne fais PAS de synthèse, PAS de résumé, et n'omets aucun détail. Je veux le texte complet, incluant les anecdotes, les exemples et les hésitations transformées en phrases correctes.
+    Intégrité absolue : Ne fais PAS de synthèse, PAS de résumé, et n'omets aucun mot. Je veux le texte complet, incluant tous mots du texte original.
     Mise en forme : Produis un fichier texte propre, prêt à être lu, sans commentaires superflus de ta part au début ou à la fin.`
         );
     });
