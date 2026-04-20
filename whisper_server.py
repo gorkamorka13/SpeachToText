@@ -27,13 +27,17 @@ def transcribe():
         temp_path = temp_audio.name
 
     try:
-        # Transcription
-        segments, info = model.transcribe(temp_path, beam_size=5)
+        # Transcription avec vad_filter pour accélérer grandement en ignorant les silences
+        print("Début du traitement de l'audio...")
+        segments, info = model.transcribe(temp_path, beam_size=2, vad_filter=True)
 
         full_text = ""
         for segment in segments:
             full_text += segment.text + " "
+            # Afficher l'avancement dans la console Python pour montrer que ce n'est pas bloqué
+            print(f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}")
 
+        print("Traitement terminé, envoi de la réponse au navigateur...")
         return jsonify({
             "text": full_text.strip(),
             "language": info.language,
