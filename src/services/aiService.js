@@ -130,34 +130,57 @@ export const extractTextFromResponse = (response) => {
 };
 
 export const transcribeWithWhisper = async (blob, url = 'http://localhost:5000/transcribe') => {
+    const sizeMo = (blob.size / 1024 / 1024).toFixed(2);
+    console.log(`[Whisper] Starting transcription: ${sizeMo} Mo, url: ${url}`);
+    
     const formData = new FormData();
     formData.append('audio_file', blob, 'recording.wav');
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout
 
     let response;
     try {
         response = await fetch(url, {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: controller.signal
         });
     } catch (error) {
+        clearTimeout(timeoutId);
+        console.error(`[Whisper] Fetch error:`, error);
+        if (error.name === 'AbortError') {
+            throw new Error("Timeout: La transcription Whisper a pris trop de temps (> 5 minutes).");
+        }
         if (error.message && error.message.includes('Failed to fetch')) {
-            throw new Error(`Le serveur Whisper local (${url}) est injoignable. Avez-vous pensé à lancer 'python whisper_server.py' dans un terminal ?`);
+            throw new Error(`Le serveur Whisper local (${url}) est injoignable. Avez-vous lancé 'python whisper_server.py' ?`);
         }
         throw error;
+    } finally {
+        clearTimeout(timeoutId);
     }
 
     if (!response.ok) {
         let errorMsg = "Erreur lors de la transcription Whisper";
+        const responseText = await response.text();
+        console.error(`[Whisper] HTTP ${response.status}: ${responseText}`);
         try {
-            const errorData = await response.json();
+            const errorData = JSON.parse(responseText);
             if (errorData.error) errorMsg = errorData.error;
         } catch (e) {
-            errorMsg = `Erreur HTTP ${response.status} ${response.statusText}`;
+            errorMsg = `Erreur HTTP ${response.status}: ${responseText || response.statusText}`;
         }
         throw new Error(errorMsg);
     }
 
     const data = await response.json();
+    console.log(`[Whisper] Response: ${data.text?.substring(0, 100)}...`);
+    
+    if (!data.text || !data.text.trim()) {
+        console.warn("[Whisper] Empty transcription received");
+        throw new Error("La transcription est vide. Le fichier audio est peut-être muet ou incomprehensible.");
+    }
+    
     return data.text;
 };
 
