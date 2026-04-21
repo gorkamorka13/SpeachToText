@@ -2,7 +2,6 @@ import React, { memo, useCallback, useState } from 'react';
 import { Settings, X, FileText, Info } from 'lucide-react';
 
 const GEMINI_MODELS = [
-  { value: 'gemini-2.5-flash', label: '⚡ Gemini 2.5 Flash (Rapide, stable)' },
   { value: 'gemini-3-flash-preview', label: '🚀 Gemini 3 Flash Preview (Ultra-rapide)' },
   { value: 'gemini-3.1-pro', label: '🧠 Gemini 3.1 Pro (Puissant, raisonnement)' },
   { value: 'custom', label: '✏️ Autre modèle...' },
