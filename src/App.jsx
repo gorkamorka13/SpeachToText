@@ -846,24 +846,24 @@ Texte à analyser :
                     silenceStartRef.current = Date.now();
                 } else {
                     const silencedDuration = Date.now() - silenceStartRef.current;
-                    const remaining = Math.max(0, 45 - Math.floor(silencedDuration / 1000));
+                    const remaining = Math.max(0, 50 - Math.floor(silencedDuration / 1000));
                     setSilenceCountdown(remaining);
 
-                    if (silencedDuration > 45000) { // 45 seconds
-                        // Silence detected for 45s
+                    if (silencedDuration >50000) { //50 seconds
+                        // Silence detected for 50s
                         // Stop detection loop
                         cancelAnimationFrame(animationFrameRef.current);
 
-                        showNotification("Silence détecté (45s). Arrêt et sauvegarde...");
+                        showNotification("Silence détecté (50s). Arrêt et sauvegarde...");
                         stopRecording(true); // Trigger auto-save
-                        setSilenceCountdown(45);
+                        setSilenceCountdown(50);
                         return;
                     }
                 }
             } else {
                 // Reset silence timer if noise detected
                 silenceStartRef.current = null;
-                setSilenceCountdown(45);
+                setSilenceCountdown(50);
             }
         }
 
@@ -1522,7 +1522,7 @@ Texte à analyser :
                                     ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800'
                                     : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600'
                                     } disabled:opacity-50 disabled:cursor-not-allowed`}
-                                title="Arrêter automatiquement après 45s de silence et sauvegarder"
+                                title="Arrêter automatiquement après 50s de silence et sauvegarder"
                             >
                                 <div className={`w-3 h-3 rounded-full ${autoStopSilence ? 'bg-red-500' : 'bg-gray-400'}`}></div>
                                 <span className="hidden sm:inline">Arrêt auto ({silenceCountdown}s)</span>
