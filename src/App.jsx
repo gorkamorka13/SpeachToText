@@ -67,7 +67,7 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
         );
     });
     const [aiModel, setAiModel] = useState(() => {
-        return localStorage.getItem('aiModel') || 'gemini-3-flash-preview';
+        return localStorage.getItem('aiModel') || 'gemini-3.1-pro';
     });
     const [aiResult, setAiResult] = useState('');
     const [isProcessingAI, setIsProcessingAI] = useState(false);
@@ -459,7 +459,7 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
                 const audioPart = await fileToGenerativePart(processedBlob);
                 const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
 
-                const response = await callGemini(aiModel || 'gemini-3-flash-preview', [
+                const response = await callGemini(aiModel || 'gemini-3.1-pro', [
                     {
                         role: 'user',
                         parts: [
@@ -796,7 +796,7 @@ Texte à analyser :
         if (fullText) {
             const runTranslation = async () => {
                 setIsTranslating(true);
-                const translationModel = aiModel || 'gemini-3-flash-preview';
+                const translationModel = aiModel || 'gemini-3.1-pro';
                 showNotification(`Traduction via Gemini (${translationModel})...`);
                 try {
                     const result = await translateWithGemini(fullText, language, targetLanguage, translationModel);
