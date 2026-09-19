@@ -60,6 +60,14 @@ export default defineConfig({
   plugins: [react()],
   // Use relative path for portability between GitHub Pages and Netlify
   base: './',
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: ['src/test/setup.js'],
+    include: ['src/**/*.{test,spec}.{js,jsx}'],
+    // Do not let tests hang on open handles (timers in retry backoff, etc.)
+    testTimeout: 15000,
+  },
   define: {
     __APP_VERSION__: JSON.stringify(versionInfo.version),
     __APP_COMMIT__: JSON.stringify(versionInfo.commitHash),

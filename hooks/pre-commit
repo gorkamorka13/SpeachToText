@@ -1,0 +1,31 @@
+#!/bin/sh
+# ============================================================
+# Pre-commit hook : bloque tout commit contenant une clé API.
+# Actif via : git config core.hooksPath hooks
+# Contournement possible (en connaissance de cause) : git commit --no-verify
+# ============================================================
+PATTERN='(AIzaSy[A-Za-z0-9_-]{30,}|sk-or-v1-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|AQ\.Ab8RN6[A-Za-z0-9_-]{20,})'
+
+FILES=$(git diff --cached --name-only --diff-filter=ACM)
+if [ -z "$FILES" ]; then
+  exit 0
+fi
+
+LEAKS=$(git diff --cached --name-only --diff-filter=ACM -z | xargs -0 grep -nE "$PATTERN" 2>/dev/null)
+
+if [ -n "$LEAKS" ]; then
+  echo ""
+  echo "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  echo "  COMMIT BLOQUE : cle API potentielle detectee dans les fichiers stages"
+  echo "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  # Sortie MASQUEE : on garde le fichier et le numero de ligne, jamais la cle
+  echo "$LEAKS" | sed -E 's/(AIzaSy|sk-or-v1-|sk-ant-|AQ\.Ab8RN6)[A-Za-z0-9_-]+/[KEY_MASKED]/g' | cut -c1-160
+  echo ""
+  echo "Actions : retirez le secret du fichier, REGENEREZ la cle si elle a"
+  echo "deja ete commitee ailleurs, puis reessayez."
+  echo "(Derogation temporaire : git commit --no-verify)"
+  echo ""
+  exit 1
+fi
+
+exit 0

@@ -1,6 +1,18 @@
 module.exports = {
   root: true,
-  env: { browser: true, es2020: true },
+  env: { browser: true, es2020: true, node: true },
+  globals: {
+    // Vitest globals (test config uses `globals: true` in vite.config.js)
+    describe: 'readonly',
+    it: 'readonly',
+    test: 'readonly',
+    expect: 'readonly',
+    vi: 'readonly',
+    beforeEach: 'readonly',
+    afterEach: 'readonly',
+    beforeAll: 'readonly',
+    afterAll: 'readonly',
+  },
   extends: [
     'eslint:recommended',
     'plugin:react/recommended',

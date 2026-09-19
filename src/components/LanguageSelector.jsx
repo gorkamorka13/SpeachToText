@@ -34,6 +34,7 @@ const LanguageSelector = memo(({ _label, value, onChange, languages, disabled, c
             src={`https://flagcdn.com/w40/${selectedLang.countryCode}.png`}
             alt={selectedLang.name}
             className="w-5 h-auto rounded-sm flex-shrink-0 shadow-sm"
+            onError={(e) => { e.target.style.display = 'none'; }}
           />
           <span className="truncate">{selectedLang.name.split(' ').slice(1).join(' ') || selectedLang.name}</span>
         </div>
@@ -65,6 +66,7 @@ const LanguageSelector = memo(({ _label, value, onChange, languages, disabled, c
                   src={`https://flagcdn.com/w40/${lang.countryCode}.png`}
                   alt={lang.name}
                   className="w-5 h-auto rounded-sm flex-shrink-0 shadow-sm"
+                  onError={(e) => { e.target.style.display = 'none'; }}
                 />
                 <span className="flex-1 text-left">{lang.name.split(' ').slice(1).join(' ') || lang.name}</span>
                 {value === lang.code && (

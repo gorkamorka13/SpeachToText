@@ -1,8 +1,19 @@
 import React, { memo, useCallback, useState } from 'react';
-import { Settings, X, FileText, Info } from 'lucide-react';
+import { Settings, X, FileText, Info, Bot } from 'lucide-react';
+import { testAIConnection } from '../services/providers/providerFactory';
 
 const GEMINI_MODELS = [
-  { value: 'gemini-3.1-pro', label: '🧠 Gemini 3.1 Pro (Puissant, raisonnement)' },
+  { value: 'gemini-3.1-flash-lite', label: '⚡ Gemini 3.1 Flash Lite (Rapide, gratuit)' },
+  { value: 'custom', label: '✏️ Autre modèle...' },
+];
+
+// Free vision-capable models on OpenRouter (":free" tier, no billing needed).
+// The catalog changes over time — the "Autre modèle..." option lets users
+// enter any current model id without a code change.
+const OPENROUTER_FREE_MODELS = [
+  { value: 'google/gemma-3-27b-it:free', label: '🟢 Gemma 3 27B (gratuit, vision)' },
+  { value: 'meta-llama/llama-4-scout:free', label: '🟢 Llama 4 Scout (gratuit, vision)' },
+  { value: 'qwen/qwen2.5-vl-72b-instruct:free', label: '🟢 Qwen2.5 VL 72B (gratuit, vision)' },
   { value: 'custom', label: '✏️ Autre modèle...' },
 ];
 
@@ -18,18 +29,51 @@ const SettingsModal = memo(({
   transcriptionEngine,
   setTranscriptionEngine,
   whisperUrl,
-  setWhisperUrl
+  setWhisperUrl,
+  whisperToken,
+  setWhisperToken,
+  aiProvider,
+  setAiProvider,
+  openrouterApiKey,
+  setOpenrouterApiKey,
+  openrouterModel,
+  setOpenrouterModel,
+  geminiApiKey,
+  setGeminiApiKey
 }) => {
-  if (!show) return null;
+  // Hooks BEFORE any conditional return (rules of hooks — the modal can be
+  // mounted with show=false and then toggled to true).
+  const [connState, setConnState] = useState({ status: 'idle', message: '' });
 
   const isKnownModel = GEMINI_MODELS.some(m => m.value !== 'custom' && m.value === aiModel);
   const selectValue = isKnownModel ? aiModel : 'custom';
+
+  const isKnownOpenRouterModel = OPENROUTER_FREE_MODELS.some(m => m.value !== 'custom' && m.value === openrouterModel);
+  const openRouterSelectValue = isKnownOpenRouterModel ? openrouterModel : 'custom';
 
   const handleSelectChange = (e) => {
     const val = e.target.value;
     if (val !== 'custom') setAiModel(val);
     else setAiModel('');
   };
+
+  const handleOpenRouterSelectChange = (e) => {
+    const val = e.target.value;
+    if (val !== 'custom') setOpenrouterModel(val);
+    else setOpenrouterModel('');
+  };
+
+  const handleTestConnection = async () => {
+    setConnState({ status: 'testing', message: '' });
+    const result = await testAIConnection({
+      provider: aiProvider,
+      model: aiProvider === 'openrouter' ? openrouterModel : aiModel,
+      openrouterApiKey
+    });
+    setConnState({ status: result.ok ? 'ok' : 'error', message: result.message });
+  };
+
+  if (!show) return null;
 
   return (
     <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
@@ -63,6 +107,16 @@ const SettingsModal = memo(({
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               placeholder="http://localhost:5000/transcribe"
             />
+            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1 mt-3">
+              Token partagé (optionnel — requis seulement si le serveur définit WHISPER_TOKEN)
+            </label>
+            <input
+              type="password"
+              value={whisperToken}
+              onChange={(e) => setWhisperToken(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              placeholder="Laisser vide si le serveur n'exige pas de token"
+            />
             <div className="mt-2 flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800 rounded text-xs text-amber-700 dark:text-amber-400">
               <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <div className="flex flex-col gap-2 w-full mt-1">
@@ -79,21 +133,91 @@ const SettingsModal = memo(({
           </div>
         )}
 
+        {/* AI Provider Configuration */}
+        <div className="mb-6 pb-6 border-b border-gray-100 dark:border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+            <Bot className="w-4 h-4 text-purple-500" />
+            Fournisseur IA
+          </h3>
+          <select
+            value={aiProvider}
+            onChange={(e) => { setAiProvider(e.target.value); setConnState({ status: 'idle', message: '' }); }}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white mb-3"
+          >
+            <option value="gemini">Google Gemini (palier gratuit, modèles Flash)</option>
+            <option value="openrouter">OpenRouter (modèles :free)</option>
+          </select>
+
+          {aiProvider === 'gemini' ? (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                Clé API Gemini <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={geminiApiKey}
+                onChange={(e) => { setGeminiApiKey(e.target.value); setConnState({ status: 'idle', message: '' }); }}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="Collez votre clé gratuite AI Studio ici"
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Clé gratuite sur{' '}
+                <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer" className="text-purple-500 hover:underline">aistudio.google.com</a>
+                {' '}— les modèles « Flash » fonctionnent sans facturation. Stockée localement sur votre machine uniquement.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                Clé API OpenRouter <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={openrouterApiKey}
+                onChange={(e) => { setOpenrouterApiKey(e.target.value); setConnState({ status: 'idle', message: '' }); }}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="sk-or-v1-..."
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Clé gratuite sur{' '}
+                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-purple-500 hover:underline">openrouter.ai/keys</a>.
+                {' '}⚠️ OpenRouter ne gère pas la transcription audio : gardez Gemini ou Whisper pour la transcription, OpenRouter pour l'Analyse IA et la Traduction.
+              </p>
+            </div>
+          )}
+        </div>
+
         {/* Model Configuration */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Modèle Gemini (Cloud) <span className="text-red-500">*</span>
+            {aiProvider === 'gemini' ? (
+              <>Modèle Gemini (Cloud) <span className="text-red-500">*</span></>
+            ) : (
+              <>Modèle OpenRouter <span className="text-red-500">*</span></>
+            )}
           </label>
-          <select
-            value={selectValue}
-            onChange={handleSelectChange}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-          >
-            {GEMINI_MODELS.map(m => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </select>
-          {selectValue === 'custom' && (
+          {aiProvider === 'gemini' ? (
+            <select
+              value={selectValue}
+              onChange={handleSelectChange}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            >
+              {GEMINI_MODELS.map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          ) : (
+            <select
+              value={openRouterSelectValue}
+              onChange={handleOpenRouterSelectChange}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            >
+              {OPENROUTER_FREE_MODELS.map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          )}
+          {aiProvider === 'gemini' && selectValue === 'custom' && (
             <input
               type="text"
               value={aiModel}
@@ -102,12 +226,35 @@ const SettingsModal = memo(({
               placeholder="Ex: gemini-1.5-pro"
             />
           )}
-          {!aiModel && (
+          {aiProvider === 'openrouter' && openRouterSelectValue === 'custom' && (
+            <input
+              type="text"
+              value={openrouterModel}
+              onChange={(e) => setOpenrouterModel(e.target.value)}
+              className={`mt-2 w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${!openrouterModel ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}`}
+              placeholder="Ex: mistralai/mistral-small-3.2-24b-instruct:free"
+            />
+          )}
+          {(aiProvider === 'gemini' ? !aiModel : !openrouterModel) && (
             <p className="text-xs text-red-500 mt-1">⚠️ Ce champ est obligatoire</p>
           )}
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            Utilisé pour l'Analyse IA et la Traduction. Modèle actif : <span className="font-mono font-bold">{aiModel || '—'}</span>
+            Utilisé pour l'Analyse IA et la Traduction. Modèle actif : <span className="font-mono font-bold">{(aiProvider === 'gemini' ? aiModel : openrouterModel) || '—'}</span>
           </p>
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <button
+              onClick={handleTestConnection}
+              disabled={connState.status === 'testing'}
+              className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors font-medium text-gray-700 dark:text-gray-200 disabled:opacity-50"
+            >
+              {connState.status === 'testing' ? 'Test en cours...' : '🔌 Tester la connexion'}
+            </button>
+            {connState.message && (
+              <span className={`text-xs ${connState.status === 'ok' ? 'text-green-600 dark:text-green-400' : connState.status === 'error' ? 'text-red-500' : 'text-gray-500'}`}>
+                {connState.message}
+              </span>
+            )}
+          </div>
         </div>
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">

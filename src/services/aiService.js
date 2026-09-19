@@ -2,6 +2,18 @@ import { GoogleGenAI } from "@google/genai";
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
+/**
+ * Clé API Gemini fournie par l'utilisateur via les Paramètres
+ * (Settings → Fournisseur IA) et stockée en localStorage. Il n'existe
+ * AUCUNE autre source de clé : rien n'est incrusté dans le bundle.
+ */
+let geminiApiKeyOverride = null;
+export const setGeminiApiKey = (key) => {
+    geminiApiKeyOverride = (key && typeof key === 'string' && key.trim()) ? key.trim() : null;
+};
+export const getGeminiApiKey = () => geminiApiKeyOverride;
+
+
 let lastCallTime = 0;
 const MIN_CALL_INTERVAL = 1000;
 
@@ -36,9 +48,9 @@ export const callGemini = async (modelName, contents, maxRetries = 3) => {
     let attempt = 0;
     while (attempt <= maxRetries) {
         try {
-            const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-            if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
-                throw new Error("Clé API Gemini manquante. Veuillez configurer VITE_GEMINI_API_KEY.");
+            const apiKey = getGeminiApiKey();
+            if (!apiKey) {
+                throw new Error("Clé API Gemini manquante. Saisissez votre clé gratuite dans les Paramètres (Fournisseur IA).");
             }
 
             console.log(`[Gemini] Appui sur le bouton, envoi de ${sizeMo} Mo au modèle ${modelName}`);
@@ -129,18 +141,22 @@ export const extractTextFromResponse = (response) => {
     return "";
 };
 
-export const transcribeWithWhisper = async (blob, url = 'http://localhost:5000/transcribe') => {
+export const transcribeWithWhisper = async (blob, url = 'http://localhost:5000/transcribe', token = null) => {
     const sizeMo = (blob.size / 1024 / 1024).toFixed(2);
     console.log(`[Whisper] Starting transcription: ${sizeMo} Mo, url: ${url}`);
     
     const formData = new FormData();
     formData.append('audio_file', blob, 'recording.wav');
 
+    // Token partagé optionnel (le serveur l'exige si WHISPER_TOKEN est défini)
+    const headers = token ? { 'X-Whisper-Token': token } : undefined;
+
     // Aucune limite de temps (timeout) car un fichier de grande taille peut prendre plusieurs heures sur CPU.
     let response;
     try {
         response = await fetch(url, {
             method: 'POST',
+            headers,
             body: formData
         });
     } catch (error) {

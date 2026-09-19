@@ -2,6 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Content-Security-Policy : limite l'impact d'un éventuel XSS (qui
+         pourrait exfiltrer les clés stockées en localStorage). Note : le
+         'unsafe-inline' sur script-src/style-src est requis par le serveur
+         de développement Vite (préambule react-refresh + styles injectés). -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://flagcdn.com; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com https://openrouter.ai http://localhost:5000 http://127.0.0.1:5000 ws://localhost:5173 ws://127.0.0.1:5173; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'" />
     <link rel="icon" type="image/png" href="/encounter_logo1_32.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Speech to Text</title>

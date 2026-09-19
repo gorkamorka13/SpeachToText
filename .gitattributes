@@ -1,0 +1,9 @@
+# Le hook pre-commit est un script shell : il DOIT rester en LF.
+# Avec core.autocrlf=true (config systeme Git for Windows), Git le
+# convertirait en CRLF au prochain checkout et le shebang #!/bin/sh
+# ne serait plus executable -> le hook anti-fuite de cles cesserait
+# silencieusement de fonctionner.
+hooks/* text eol=lf
+
+# Ce fichier lui-meme doit rester en LF (il est lu par Git).
+.gitattributes text eol=lf

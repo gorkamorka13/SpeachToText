@@ -13,7 +13,8 @@ import WhisperHelpModal from './components/WhisperHelpModal';
 import AiErrorModal from './components/AiErrorModal';
 
 // Services & Utils
-import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, translateWithGemini } from './services/aiService';
+import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, setGeminiApiKey } from './services/aiService';
+import { callModel, translateWithAI } from './services/providers/providerFactory';
 import { trimSilence } from './utils/audioUtils';
 import { sanitizeInput, sanitizeFilename, validateFileType, escapeHtml, sanitizeAIInstructions } from './utils/securityUtils';
 import { generatePDF, downloadDOCX } from './services/exportService';
@@ -46,6 +47,9 @@ export default function SpeechToTextApp() {
     const [whisperUrl, setWhisperUrl] = useState(() => {
         return localStorage.getItem('whisperUrl') || 'http://localhost:5000/transcribe';
     });
+    const [whisperToken, setWhisperToken] = useState(() => {
+        return localStorage.getItem('whisperToken') || '';
+    });
     const [showWhisperHelp, setShowWhisperHelp] = useState(false);
     const [autoAnalyze, setAutoAnalyze] = useState(true);
     const [aiInstructions, setAiInstructions] = useState(() => {
@@ -67,7 +71,23 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
         );
     });
     const [aiModel, setAiModel] = useState(() => {
-        return localStorage.getItem('aiModel') || 'gemini-3.1-pro';
+        // Migration : l'ancien défaut 'gemini-3.1-pro' (non gratuit) est
+        // remplacé par 'gemini-3.1-flash-lite' (palier gratuit Gemini).
+        const saved = localStorage.getItem('aiModel');
+        if (!saved || saved === 'gemini-3.1-pro') return 'gemini-3.1-flash-lite';
+        return saved;
+    });
+    const [aiProvider, setAiProvider] = useState(() => {
+        return localStorage.getItem('aiProvider') || 'gemini'; // 'gemini' or 'openrouter'
+    });
+    const [geminiApiKey, setGeminiApiKeyState] = useState(() => {
+        return localStorage.getItem('geminiApiKey') || '';
+    });
+    const [openrouterApiKey, setOpenrouterApiKeyState] = useState(() => {
+        return localStorage.getItem('openrouterApiKey') || '';
+    });
+    const [openrouterModel, setOpenrouterModel] = useState(() => {
+        return localStorage.getItem('openrouterModel') || 'google/gemma-3-27b-it:free';
     });
     const [aiResult, setAiResult] = useState('');
     const [isProcessingAI, setIsProcessingAI] = useState(false);
@@ -284,9 +304,33 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
         localStorage.setItem('transcriptionEngine', transcriptionEngine);
     }, [transcriptionEngine]);
 
+    // Provider configuration persistence + runtime Gemini key override
+    useEffect(() => {
+        localStorage.setItem('aiProvider', aiProvider);
+    }, [aiProvider]);
+
+    useEffect(() => {
+        localStorage.setItem('geminiApiKey', geminiApiKey);
+        // Clé vide = aucune clé configurée (l'app demandera de la saisir
+        // dans les Paramètres).
+        setGeminiApiKey(geminiApiKey);
+    }, [geminiApiKey]);
+
+    useEffect(() => {
+        localStorage.setItem('openrouterApiKey', openrouterApiKey);
+    }, [openrouterApiKey]);
+
+    useEffect(() => {
+        localStorage.setItem('openrouterModel', openrouterModel);
+    }, [openrouterModel]);
+
     useEffect(() => {
         localStorage.setItem('whisperUrl', whisperUrl);
     }, [whisperUrl]);
+
+    useEffect(() => {
+        localStorage.setItem('whisperToken', whisperToken);
+    }, [whisperToken]);
 
     useEffect(() => {
         localStorage.setItem('enableTranslation', enableTranslation);
@@ -426,7 +470,7 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
 
             if (transcriptionEngine === 'whisper') {
                 showNotification("Transcription locale (Whisper) en cours...");
-                text = await transcribeWithWhisper(blobToUse, whisperUrl);
+                text = await transcribeWithWhisper(blobToUse, whisperUrl, whisperToken);
             } else {
                 // Check if AI model is configured for Gemini transcription
                 if (!aiModel) {
@@ -459,7 +503,7 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
                 const audioPart = await fileToGenerativePart(processedBlob);
                 const prompt = "Transcribe the following audio exactly as spoken. Output only the transcription, no introductory text.";
 
-                const response = await callGemini(aiModel || 'gemini-3.1-pro', [
+                const response = await callGemini(aiModel || 'gemini-3.1-flash-lite', [
                     {
                         role: 'user',
                         parts: [
@@ -540,8 +584,9 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
         }
 
         // Check if AI model is configured
-        if (!aiModel) {
-            showNotification("⚠️ Veuillez configurer un modèle Gemini dans les paramètres");
+        const effectiveModel = aiProvider === 'openrouter' ? openrouterModel : aiModel;
+        if (!effectiveModel) {
+            showNotification("⚠️ Veuillez configurer un modèle dans les paramètres");
             setShowSettings(true);
             return;
         }
@@ -562,7 +607,7 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
         }, 1000);
 
         setAiResult('');
-        showNotification(`Analyse IA (${aiModel}) en cours...`);
+        showNotification(`Analyse IA (${effectiveModel}) en cours...`);
 
         try {
             const sanitizedInstructions = sanitizeAIInstructions(aiInstructions);
@@ -577,9 +622,14 @@ Texte à analyser :
 "${sanitizedText}"
             `;
 
-            const response = await callGemini(aiModel, [
-                { role: 'user', parts: [{ text: prompt }] }
-            ]);
+            const response = await callModel({
+                provider: aiProvider,
+                model: effectiveModel,
+                openrouterApiKey,
+                contents: [
+                    { role: 'user', parts: [{ text: prompt }] }
+                ]
+            });
 
             // Track tokens
             if (response.usageMetadata) {
@@ -770,7 +820,14 @@ Texte à analyser :
             setIsTranslating(true);
             showNotification("Traduction manuelle en cours...");
             try {
-                const result = await translateWithGemini(fullText, language, targetLanguage, aiModel);
+                const result = await translateWithAI({
+                    text: fullText,
+                    sourceLang: language,
+                    targetLang: targetLanguage,
+                    provider: aiProvider,
+                    model: aiProvider === 'openrouter' ? openrouterModel : aiModel,
+                    openrouterApiKey
+                });
                 setTranslatedTranscript(result);
             } catch (error) {
                 logError(error, "Traduction Manuelle");
@@ -778,7 +835,7 @@ Texte à analyser :
                 setIsTranslating(false);
             }
         }
-    }, [transcript, interimTranscript, aiModel, language, targetLanguage, showNotification, logError]);
+    }, [transcript, interimTranscript, aiModel, aiProvider, openrouterApiKey, openrouterModel, language, targetLanguage, showNotification, logError]);
 
     // Real-time translation effect (Debounced)
     useEffect(() => {
@@ -796,10 +853,17 @@ Texte à analyser :
         if (fullText) {
             const runTranslation = async () => {
                 setIsTranslating(true);
-                const translationModel = aiModel || 'gemini-3.1-pro';
-                showNotification(`Traduction via Gemini (${translationModel})...`);
+                const translationModel = aiProvider === 'openrouter' ? openrouterModel : (aiModel || 'gemini-3.1-flash-lite');
+                showNotification(`Traduction (${translationModel})...`);
                 try {
-                    const result = await translateWithGemini(fullText, language, targetLanguage, translationModel);
+                    const result = await translateWithAI({
+                        text: fullText,
+                        sourceLang: language,
+                        targetLang: targetLanguage,
+                        provider: aiProvider,
+                        model: translationModel,
+                        openrouterApiKey
+                    });
                     setTranslatedTranscript(result);
                 } catch (error) {
                     logError(error, "Traduction");
@@ -811,7 +875,7 @@ Texte à analyser :
         } else {
             setTranslatedTranscript('');
         }
-    }, [debouncedTranscript, debouncedInterimTranscript, targetLanguage, language, enableTranslation, aiModel]);
+    }, [debouncedTranscript, debouncedInterimTranscript, targetLanguage, language, enableTranslation, aiModel, aiProvider, openrouterApiKey, openrouterModel]);
 
 
 
@@ -2033,6 +2097,16 @@ Texte à analyser :
                 setTranscriptionEngine={setTranscriptionEngine}
                 whisperUrl={whisperUrl}
                 setWhisperUrl={setWhisperUrl}
+                whisperToken={whisperToken}
+                setWhisperToken={setWhisperToken}
+                aiProvider={aiProvider}
+                setAiProvider={setAiProvider}
+                openrouterApiKey={openrouterApiKey}
+                setOpenrouterApiKey={setOpenrouterApiKeyState}
+                openrouterModel={openrouterModel}
+                setOpenrouterModel={setOpenrouterModel}
+                geminiApiKey={geminiApiKey}
+                setGeminiApiKey={setGeminiApiKeyState}
             />
 
             {/* Whisper Local Help Modal */}

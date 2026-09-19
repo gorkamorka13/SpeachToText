@@ -14,6 +14,9 @@ dist-ssr
 *.local
 
 # Environment variables
+# Aucun fichier .env n'est requis par ce projet : les cles API sont saisies a
+# l'execution dans l'application (Parametres -> Fournisseur IA).
+# Ces regles restent comme filet de securite si un .env est cree par erreur.
 .env
 .env.local
 .env.production.local
@@ -43,3 +46,12 @@ coverage
 
 # Windows reserved name files
 nul
+
+# Python
+__pycache__/
+
+# Vite : fichier temporaire cree a cote de vite.config.js pendant que le
+# serveur de dev (ou vitest) tourne. S'il est indexe au vol, git echoue avec
+# "fatal: adding files failed" car le fichier disparait avant l'indexation.
+*.timestamp-*.mjs
+vite.config.js.timestamp-*

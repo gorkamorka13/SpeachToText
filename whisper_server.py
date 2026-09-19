@@ -5,7 +5,45 @@ from flask_cors import CORS
 from faster_whisper import WhisperModel
 
 app = Flask(__name__)
-CORS(app)  # Autorise les requêtes depuis votre application React
+
+# ------------------------------------------------------------------
+# CORS restreint : uniquement les origines de l'application web
+# (dev Vite :5173, preview :4173). Surchargable via la variable
+# d'environnement WHISPER_ALLOWED_ORIGIN (séparées par des virgules),
+# ex. pour autoriser l'app déployée :
+# WHISPER_ALLOWED_ORIGIN=https://mon-site.github.io
+# ------------------------------------------------------------------
+_allowed_origins = [
+    o.strip() for o in os.environ.get(
+        "WHISPER_ALLOWED_ORIGIN",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
+    ).split(",")
+    if o.strip()
+]
+CORS(app, origins=_allowed_origins or [])
+
+# ------------------------------------------------------------------
+# Token partagé OPTIONNEL : si la variable d'environnement WHISPER_TOKEN
+# est définie, chaque requête /transcribe doit porter l'en-tête
+# X-Whisper-Token avec la même valeur. Ce token se saisit dans les
+# Paramètres de l'application (section Whisper Local).
+# ------------------------------------------------------------------
+WHISPER_TOKEN = os.environ.get("WHISPER_TOKEN", "").strip()
+
+@app.before_request
+def _check_shared_token():
+    # Le endpoint /health reste libre (vérification de disponibilité)
+    if request.path == '/health':
+        return None
+    if WHISPER_TOKEN and request.headers.get('X-Whisper-Token', '') != WHISPER_TOKEN:
+        return jsonify({"error": "Accès refusé : token invalide ou manquant (en-tête X-Whisper-Token)"}), 401
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok", "token_required": bool(WHISPER_TOKEN)})
+
+# Taille maximale d'un upload (défaut 500 Mo, ajustable via WHISPER_MAX_MB)
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get("WHISPER_MAX_MB", "500")) * 1024 * 1024
 
 # Vous pouvez ajuster le modèle ici (tiny, base, small, medium, large-v3)
 # 'base' est un bon compromis vitesse/précision pour une utilisation locale
@@ -57,6 +95,11 @@ def transcribe():
             os.remove(temp_path)
 
 if __name__ == '__main__':
-    # Lance le serveur sur le port 5000
-    print("Serveur Whisper prêt sur http://localhost:5000")
-    app.run(host='0.0.0.0', port=5000)
+    # N'écoute que sur l'interface locale (127.0.0.1) : le serveur n'est
+    # plus accessible depuis les autres machines du réseau local.
+    print("Serveur Whisper prêt sur http://127.0.0.1:5000 (interface locale uniquement)")
+    if WHISPER_TOKEN:
+        print("Protection par token ACTIVEE (X-Whisper-Token)")
+    else:
+        print("Aucun token configure (WHISPER_TOKEN) : accessible sans authentification en local")
+    app.run(host='127.0.0.1', port=5000)
