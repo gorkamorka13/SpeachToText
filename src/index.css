@@ -1,3 +1,16 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Contrôles natifs (liste déroulante d'un <select>, barres de défilement,
+   sélecteurs de date) : ils ne sont pas stylés par Tailwind. Sans cela, le
+   popup reste clair en mode sombre alors que le texte des <option> est clair,
+   ce qui rend les options illisibles. */
+:root {
+    color-scheme: light;
+}
+
+html.dark,
+body.dark {
+    color-scheme: dark;
+}

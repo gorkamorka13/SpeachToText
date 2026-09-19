@@ -33,4 +33,24 @@ describe('AudioLevelMeter', () => {
         expect(screen.getByText('Non supporté')).toBeInTheDocument();
         expect(screen.queryByText(/Autorisez le microphone/)).not.toBeInTheDocument();
     });
+
+    it('place le trait du seuil de silence sur la même échelle que les barres', () => {
+        render(<AudioLevelMeter volumeLevel={0} status="live" threshold={32} />);
+        // 32 / 128 = 25 %
+        expect(screen.getByTestId('silence-threshold').style.left).toBe('25%');
+    });
+
+    it('masque le trait sans seuil (arrêt auto désactivé) ou micro inaccessible', () => {
+        const { rerender } = render(<AudioLevelMeter volumeLevel={0} status="live" threshold={null} />);
+        expect(screen.queryByTestId('silence-threshold')).not.toBeInTheDocument();
+
+        rerender(<AudioLevelMeter volumeLevel={0} status="denied" threshold={10} />);
+        expect(screen.queryByTestId('silence-threshold')).not.toBeInTheDocument();
+    });
+
+    it('affiche la source mesurée quand elle est précisée', () => {
+        render(<AudioLevelMeter volumeLevel={10} status="live" label="audio système" />);
+        expect(screen.getByText(/audio système/)).toBeInTheDocument();
+        expect(screen.getByText(/Niveau Signal/)).toBeInTheDocument();
+    });
 });

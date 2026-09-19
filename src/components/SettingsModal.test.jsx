@@ -34,6 +34,8 @@ const baseProps = {
     setAutoStopSilence: vi.fn(),
     silenceTimeout: 40,
     setSilenceTimeout: vi.fn(),
+    silenceThreshold: 24,
+    setSilenceThreshold: vi.fn(),
     maxRecordingMinutes: 60,
     setMaxRecordingMinutes: vi.fn()
 };
@@ -117,6 +119,17 @@ describe('SettingsModal', () => {
             expect(baseProps.setMaxRecordingMinutes).toHaveBeenCalledWith(120);
         });
 
+        it("renvoie vers la barre d'outils pour la source audio, sans liste en doublon", () => {
+            render(<SettingsModal {...baseProps} />);
+
+            expect(screen.getByText(/Source audio : à choisir dans la barre d'outils/)).toBeInTheDocument();
+            expect(screen.getByText(/Stereo Mix/, { selector: 'strong, p' })).toBeInTheDocument();
+            // La source et l'entrée ne se règlent plus ici (elles faisaient doublon)
+            expect(screen.queryByRole('combobox', { name: /Source audio/ })).not.toBeInTheDocument();
+            expect(screen.queryByRole('option', { name: /Microphone/ })).not.toBeInTheDocument();
+            expect(screen.queryByRole('option', { name: /Audio système/ })).not.toBeInTheDocument();
+        });
+
         it('remonte le changement de délai de silence', () => {
             render(<SettingsModal {...baseProps} />);
 
@@ -129,6 +142,15 @@ describe('SettingsModal', () => {
             render(<SettingsModal {...baseProps} autoStopSilence={false} />);
 
             expect(screen.getByDisplayValue('40 secondes (défaut)')).toBeDisabled();
+            expect(screen.getByDisplayValue('Normale (défaut)')).toBeDisabled();
+        });
+
+        it('remonte le changement de sensibilité du micro', () => {
+            render(<SettingsModal {...baseProps} />);
+
+            fireEvent.change(screen.getByDisplayValue('Normale (défaut)'), { target: { value: '43' } });
+
+            expect(baseProps.setSilenceThreshold).toHaveBeenCalledWith(43);
         });
     });
 });

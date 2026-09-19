@@ -3,8 +3,10 @@ import { Settings, X, FileText, Info, Bot, Clock } from 'lucide-react';
 import { testAIConnection } from '../services/providers/providerFactory';
 import {
   SILENCE_TIMEOUT_OPTIONS,
+  SILENCE_THRESHOLD_OPTIONS,
   MAX_RECORDING_OPTIONS,
   DEFAULT_SILENCE_TIMEOUT,
+  DEFAULT_SILENCE_THRESHOLD,
   DEFAULT_MAX_RECORDING_MINUTES
 } from '../utils/audioUtils';
 
@@ -22,6 +24,10 @@ const OPENROUTER_FREE_MODELS = [
   { value: 'qwen/qwen2.5-vl-72b-instruct:free', label: '🟢 Qwen2.5 VL 72B (gratuit, vision)' },
   { value: 'custom', label: '✏️ Autre modèle...' },
 ];
+
+// Les popups natifs des <select> ne sont pas stylés par Tailwind : on force les
+// couleurs des <option> pour rester lisible en mode sombre comme en mode clair.
+const SELECT_OPTION_CLASS = 'bg-white text-gray-900 dark:bg-gray-800 dark:text-gray-100';
 
 const SettingsModal = memo(({
   show,
@@ -52,6 +58,8 @@ const SettingsModal = memo(({
   setAutoStopSilence = () => { },
   silenceTimeout = DEFAULT_SILENCE_TIMEOUT,
   setSilenceTimeout = () => { },
+  silenceThreshold = DEFAULT_SILENCE_THRESHOLD,
+  setSilenceThreshold = () => { },
   maxRecordingMinutes = DEFAULT_MAX_RECORDING_MINUTES,
   setMaxRecordingMinutes = () => { }
 }) => {
@@ -158,8 +166,8 @@ const SettingsModal = memo(({
             onChange={(e) => { setAiProvider(e.target.value); setConnState({ status: 'idle', message: '' }); }}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white mb-3"
           >
-            <option value="gemini">Google Gemini (palier gratuit, modèles Flash)</option>
-            <option value="openrouter">OpenRouter (modèles :free)</option>
+            <option value="gemini" className={SELECT_OPTION_CLASS}>Google Gemini (palier gratuit, modèles Flash)</option>
+            <option value="openrouter" className={SELECT_OPTION_CLASS}>OpenRouter (modèles :free)</option>
           </select>
 
           {aiProvider === 'gemini' ? (
@@ -311,6 +319,21 @@ const SettingsModal = memo(({
             Enregistrement
           </h3>
 
+          <div className="mb-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/30 border border-gray-100 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-300 space-y-1.5">
+            <p className="font-medium text-gray-700 dark:text-gray-200">
+              Source audio : à choisir dans la barre d'outils (liste avec l'icône haut-parleur).
+            </p>
+            <p>
+              <strong>Entrées audio</strong> : un micro, ou « Stereo Mix » pour enregistrer le <strong>son du PC</strong> (vidéo, lecteur, appel). Pour l'activer dans Windows : Paramètres du son → Plus de paramètres de son → Enregistrement → clic droit → « Afficher les périphériques désactivés » → « Stereo Mix » → Activer. Il ne capte que ce qui sort sur les haut-parleurs de <em>sa</em> carte son (pas ceux d'un écran HDMI) : envoyez le lecteur vers cette sortie dans le mélangeur de volume de Windows.
+            </p>
+            <p>
+              <strong>Audio système / onglet</strong> : capture le son d'un <strong>onglet</strong> (Chrome/Edge/Firefox) : choisissez un onglet et cochez « Partager l'audio ». Safari ne fournit pas d'audio système.
+            </p>
+            <p>
+              Le mode <em>Live</em> transcrit toujours le micro par défaut de Windows ; pour le son du PC ou une autre entrée, utilisez le mode <em>Post</em>.
+            </p>
+          </div>
+
           <div className="mb-3">
             <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
               Durée maximale d'enregistrement
@@ -321,7 +344,7 @@ const SettingsModal = memo(({
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             >
               {MAX_RECORDING_OPTIONS.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
+                <option key={option.value} value={option.value} className={SELECT_OPTION_CLASS}>{option.label}</option>
               ))}
             </select>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
@@ -353,13 +376,32 @@ const SettingsModal = memo(({
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {SILENCE_TIMEOUT_OPTIONS.map(seconds => (
-                <option key={seconds} value={seconds}>
+                <option key={seconds} value={seconds} className={SELECT_OPTION_CLASS}>
                   {seconds} secondes{seconds === DEFAULT_SILENCE_TIMEOUT ? ' (défaut)' : ''}
                 </option>
               ))}
             </select>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               L'enregistrement s'arrête et est sauvegardé après ce temps sans son détecté (30, 40 ou 50 s).
+            </p>
+          </div>
+
+          <div className="mt-3">
+            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+              Sensibilité du micro (détection du silence)
+            </label>
+            <select
+              value={silenceThreshold}
+              onChange={(e) => setSilenceThreshold(Number(e.target.value))}
+              disabled={!autoStopSilence}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {SILENCE_THRESHOLD_OPTIONS.map(option => (
+                <option key={option.value} value={option.value} className={SELECT_OPTION_CLASS}>{option.label}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Micro trop sensible (le bruit de fond empêche l'arrêt) : choisissez « Faible ». Voix douce prise pour du silence : choisissez « Élevée ». Le trait sur le « Niveau Signal » indique le seuil.
             </p>
           </div>
         </div>

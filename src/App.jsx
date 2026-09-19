@@ -3,6 +3,7 @@ import { Copy, Download, Save, Trash2, Mic, FileAudio, Settings, Mail, Speaker, 
 
 // Components
 import LanguageSelector from './components/LanguageSelector';
+import AudioSourceSelect from './components/AudioSourceSelect';
 import SettingsModal from './components/SettingsModal';
 import SuccessModal from './components/SuccessModal';
 import EmailModal from './components/EmailModal';
@@ -17,17 +18,48 @@ import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGener
 import { callModel, translateWithAI } from './services/providers/providerFactory';
 import {
     trimSilence,
-    getAverageLevel,
+    getRmsLevel,
     parseSilenceTimeout,
     parseMaxRecordingMinutes,
     isRecordingLimitReached,
-    formatRecordingLimit
+    formatRecordingLimit,
+    describeAudioInput,
+    parseAudioSource,
+    needsMic,
+    needsSystemAudio,
+    getDisplayAudioConstraints,
+    getMicConstraints,
+    DEFAULT_AUDIO_INPUT,
+    isLoopbackInputLabel,
+    listAudioInputs,
+    getAudioExtension,
+    normalizeAudioMimeType,
+    parseSilenceThreshold
 } from './utils/audioUtils';
 import { sanitizeInput, sanitizeFilename, validateFileType, escapeHtml, sanitizeAIInstructions } from './utils/securityUtils';
 import { generatePDF, downloadDOCX } from './services/exportService';
 
 // Hooks
 import { useDebounce, useNotification } from './hooks';
+
+// Télécharge un Blob sous le nom donné. Le lien est retiré du DOM et l'URL
+// n'est libérée qu'après un délai : la révoquer juste après click() peut
+// interrompre le téléchargement (Firefox, Safari).
+const saveBlobAs = (blob, fileName) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+};
+
+// Levée quand l'utilisateur arrête l'enregistrement pendant que startRecording()
+// attend encore une autorisation (micro / partage d'écran) : ce n'est pas une erreur.
+const START_CANCELLED = new Error('Démarrage de l\'enregistrement annulé');
 
 export default function SpeechToTextApp() {
     // -----------------------------------------------------------------
@@ -113,11 +145,21 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
     const [silenceTimeout, setSilenceTimeout] = useState(() => {
         return parseSilenceTimeout(localStorage.getItem('silenceTimeout'));
     });
+    // Seuil de niveau sous lequel on considère qu'il y a silence (sensibilité du micro)
+    const [silenceThreshold, setSilenceThreshold] = useState(() => {
+        return parseSilenceThreshold(localStorage.getItem('silenceThreshold'));
+    });
     const [silenceCountdown, setSilenceCountdown] = useState(silenceTimeout);
     // Durée maximale d'enregistrement (minutes, 0 = illimité) : 1 h par défaut
     const [maxRecordingMinutes, setMaxRecordingMinutes] = useState(() => {
         return parseMaxRecordingMinutes(localStorage.getItem('maxRecordingMinutes'));
     });
+    // Entrée audio utilisée pour le « micro » : '' = micro par défaut de Windows,
+    // sinon l'identifiant d'une entrée (ex. « Stereo Mix » pour le son du PC)
+    const [audioInputId, setAudioInputId] = useState(() => {
+        return localStorage.getItem('audioInputId') || DEFAULT_AUDIO_INPUT;
+    });
+    const [audioInputs, setAudioInputs] = useState([]);
     const [volumeLevel, setVolumeLevel] = useState(0);
     // 'idle' | 'live' | 'denied' | 'error' | 'unsupported' — état du VU-mètre permanent
     const [micMonitorStatus, setMicMonitorStatus] = useState('idle');
@@ -141,9 +183,12 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
     // Custom hooks
     const { notification, showNotification } = useNotification();
 
-    // Audio Settings
-    const [enableSystemAudio, setEnableSystemAudio] = useState(() => {
-        return localStorage.getItem('enableSystemAudio') === 'true';
+    // Source audio à enregistrer : 'mic' | 'system' | 'both'
+    const [audioSource, setAudioSource] = useState(() => {
+        const saved = localStorage.getItem('audioSource');
+        if (saved) return parseAudioSource(saved);
+        // Migration douce depuis l'ancien booléen « Audio système activé »
+        return localStorage.getItem('enableSystemAudio') === 'true' ? 'both' : 'mic';
     });
 
     const [pdfJustify, setPdfJustify] = useState(() => {
@@ -171,10 +216,18 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
     // au démarrage de l'enregistrement)
     const autoStopSilenceRef = useRef(autoStopSilence);
     const silenceTimeoutRef = useRef(silenceTimeout);
+    const silenceThresholdRef = useRef(silenceThreshold);
+    // Lues par openMicStream() (appelée depuis des callbacks mémorisés) : refs, pas état
+    const audioInputIdRef = useRef(audioInputId);
+    const audioInputsRef = useRef([]);
     const maxRecordingMinutesRef = useRef(maxRecordingMinutes);
     const maxDurationReachedRef = useRef(false);
     const stopRecordingRef = useRef(null);
     const isAutoSavingRef = useRef(false);
+    // Démarrage en cours : numéro de tentative (invalidé par stopRecording) et
+    // drapeau anti double-clic pendant les étapes asynchrones de startRecording.
+    const startAttemptRef = useRef(0);
+    const startingRef = useRef(false);
     const analyserRef = useRef(null);
     const audioContextRef = useRef(null); // Keep ref to close it
     const dataArrayRef = useRef(null);
@@ -383,8 +436,10 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
     }, [targetLanguage]);
 
     useEffect(() => {
-        localStorage.setItem('enableSystemAudio', enableSystemAudio);
-    }, [enableSystemAudio]);
+        localStorage.setItem('audioSource', audioSource);
+        // L'ancien réglage booléen n'est plus utilisé : on nettoie.
+        localStorage.removeItem('enableSystemAudio');
+    }, [audioSource]);
 
     useEffect(() => {
         localStorage.setItem('autoStopSilence', autoStopSilence);
@@ -396,6 +451,19 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
         silenceTimeoutRef.current = silenceTimeout;
         setSilenceCountdown(silenceTimeout); // le compteur affiché repart du délai choisi
     }, [silenceTimeout]);
+
+    // Le compteur d'arrêt auto repart de sa valeur initiale à chaque démarrage
+    // ou arrêt de l'enregistrement (un arrêt manuel en plein décompte le laissait figé).
+    useEffect(() => {
+        silenceStartRef.current = null;
+        setSilenceCountdown(silenceTimeoutRef.current);
+    }, [isListening]);
+
+    useEffect(() => {
+        localStorage.setItem('silenceThreshold', silenceThreshold);
+        silenceThresholdRef.current = silenceThreshold;
+        silenceStartRef.current = null; // le silence déjà mesuré l'était avec l'ancien seuil
+    }, [silenceThreshold]);
 
     useEffect(() => {
         localStorage.setItem('maxRecordingMinutes', maxRecordingMinutes);
@@ -508,6 +576,9 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
         if (!blobToUse || blobToUse.size === 0) {
             logError("Le fichier audio est vide ou n'a pas pu être capturé.", "Transcription");
             showNotification("Audio vide ou invalide.");
+            // Rien à sauvegarder : on abandonne la chaîne d'auto-sauvegarde
+            // (sinon le drapeau resterait armé pour la transcription suivante).
+            isAutoSavingRef.current = false;
             return;
         }
 
@@ -535,6 +606,8 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
                     showNotification("⚠️ Veuillez configurer un modèle Gemini dans les paramètres");
                     setShowSettings(true);
                     setIsTranscribing(false);
+                    // On sauvegarde au moins l'audio plutôt que de bloquer la chaîne
+                    if (isAutoSavingRef.current) finalizeAutoSave(null);
                     return;
                 }
 
@@ -605,6 +678,12 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
                         finalizeAutoSave(null);
                     }
                 }
+            } else {
+                // Réponse vide (ex. audio muet côté Gemini) : on le signale et on
+                // clôt la chaîne d'auto-sauvegarde au lieu de la laisser pendante.
+                logError("Aucun texte n'a été reconnu dans l'audio.", "Transcription");
+                showNotification("Aucun texte reconnu dans l'audio.");
+                if (isAutoSavingRef.current) finalizeAutoSave(null);
             }
         } catch (error) {
             console.error("Transcription Error Detail:", error);
@@ -646,12 +725,16 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
         if (!effectiveModel) {
             showNotification("⚠️ Veuillez configurer un modèle dans les paramètres");
             setShowSettings(true);
+            if (isAutoSavingRef.current) finalizeAutoSave(null); // sauvegarde sans analyse
             return;
         }
 
         const textToAnalyze = (typeof textOverride === 'string' ? textOverride : null) || transcript;
         if (!textToAnalyze) {
-            if (isAutoSavingRef.current) logError("Auto-Save: Pas de texte à analyser.");
+            if (isAutoSavingRef.current) {
+                logError("Auto-Save: Pas de texte à analyser.");
+                finalizeAutoSave(null);
+            }
             return;
         }
 
@@ -956,6 +1039,55 @@ Texte à analyser :
         streamsRef.current = [];
     }, []);
 
+    // Entrées audio proposées dans les Paramètres. Les libellés (« Stereo Mix »…)
+    // ne sont fournis par le navigateur qu'une fois le micro autorisé.
+    const refreshAudioInputs = useCallback(async () => {
+        if (!navigator.mediaDevices?.enumerateDevices) return [];
+        try {
+            const inputs = listAudioInputs(await navigator.mediaDevices.enumerateDevices());
+            audioInputsRef.current = inputs;
+            setAudioInputs(inputs);
+            return inputs;
+        } catch (e) {
+            return [];
+        }
+    }, []);
+
+    // Liste unique « source audio » de la barre d'outils : source + entrée d'un coup
+    // (une entrée choisie devient l'entrée du micro ; « système » et « mixage »
+    // gardent la dernière entrée choisie)
+    const handleAudioChoice = useCallback(({ source, inputId }) => {
+        setAudioSource(source);
+        if (inputId !== undefined) setAudioInputId(inputId);
+    }, []);
+
+    // Nom de l'entrée mesurée par le VU-mètre (et utilisée par la source « micro »)
+    const audioInputLabel = describeAudioInput(audioInputs, audioInputId);
+
+    // Ouvre le flux « micro » sur l'entrée choisie dans les Paramètres (micro par
+    // défaut de Windows sinon). Utilisée par le VU-mètre permanent ET l'enregistrement,
+    // pour qu'ils écoutent la même entrée.
+    const openMicStream = useCallback(async () => {
+        const id = audioInputIdRef.current;
+        if (id) {
+            let label = audioInputsRef.current.find(input => input.id === id)?.label;
+            if (!label) {
+                const inputs = await refreshAudioInputs();
+                label = inputs.find(input => input.id === id)?.label;
+            }
+            try {
+                return await navigator.mediaDevices.getUserMedia(
+                    getMicConstraints(id, { raw: isLoopbackInputLabel(label) })
+                );
+            } catch (err) {
+                // Entrée débranchée ou désactivée depuis : on n'empêche pas d'enregistrer
+                if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') throw err;
+                showNotification("Entrée audio choisie introuvable : le micro par défaut est utilisé.");
+            }
+        }
+        return navigator.mediaDevices.getUserMedia(getMicConstraints());
+    }, [refreshAudioInputs, showNotification]);
+
     // ------------------------------------------------------------------
     // Surveillance permanente du niveau d'entrée (« Niveau Signal »)
     // Le VU-mètre doit rester vivant en permanence, pas seulement pendant
@@ -993,8 +1125,8 @@ Texte à analyser :
         const data = micMonitorDataRef.current;
         if (!analyser || !data) return;
 
-        analyser.getByteFrequencyData(data);
-        setVolumeLevel(getAverageLevel(data));
+        analyser.getFloatTimeDomainData(data);
+        setVolumeLevel(getRmsLevel(data));
         micMonitorFrameRef.current = requestAnimationFrame(micMonitorLoop);
     }, []);
 
@@ -1013,7 +1145,7 @@ Texte à analyser :
 
         micMonitorStartingRef.current = true;
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const stream = await openMicStream();
 
             // Composant démonté pendant l'acquisition (StrictMode, navigation) :
             // on libère immédiatement le micro.
@@ -1034,13 +1166,14 @@ Texte à analyser :
 
             const source = context.createMediaStreamSource(stream);
             const analyser = context.createAnalyser();
-            analyser.fftSize = 256;
+            analyser.fftSize = 2048; // fenêtre de ~43 ms : assez longue pour un RMS stable
             source.connect(analyser); // Jamais connecté à destination : aucun retour audio
 
             micMonitorAnalyserRef.current = analyser;
-            micMonitorDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+            micMonitorDataRef.current = new Float32Array(analyser.fftSize);
             micMonitorWarnedRef.current = ''; // ré-armement des avertissements
             setMicMonitorStatus('live');
+            refreshAudioInputs(); // le micro est autorisé : les libellés des entrées sont disponibles
 
             if (micMonitorFrameRef.current) cancelAnimationFrame(micMonitorFrameRef.current);
             micMonitorFrameRef.current = requestAnimationFrame(micMonitorLoop);
@@ -1059,16 +1192,18 @@ Texte à analyser :
         } finally {
             micMonitorStartingRef.current = false;
         }
-    }, [micMonitorLoop]);
+    }, [micMonitorLoop, openMicStream, refreshAudioInputs]);
 
     // Démarrage de la surveillance (et suivi des périphériques ajoutés/retirés)
     useEffect(() => {
         // Remis à false après un éventuel démontage (StrictMode en dev)
         micMonitorDisposedRef.current = false;
         startMicMonitor();
+        refreshAudioInputs();
 
         const md = navigator.mediaDevices;
         const handleDeviceChange = () => {
+            refreshAudioInputs(); // entrée branchée/retirée : la liste des Paramètres suit
             if (!micMonitorStreamRef.current) startMicMonitor();
         };
         if (md?.addEventListener) md.addEventListener('devicechange', handleDeviceChange);
@@ -1097,7 +1232,17 @@ Texte à analyser :
             permissionStatus?.removeEventListener?.('change', handlePermissionChange);
             stopMicMonitor();
         };
-    }, [startMicMonitor, stopMicMonitor]);
+    }, [startMicMonitor, stopMicMonitor, refreshAudioInputs]);
+
+    // Entrée audio choisie : mémorisée, et le VU-mètre au repos bascule dessus
+    useEffect(() => {
+        localStorage.setItem('audioInputId', audioInputId);
+        if (audioInputIdRef.current === audioInputId) return; // premier rendu : rien à relancer
+        audioInputIdRef.current = audioInputId;
+        stopMicMonitor();
+        micMonitorLastAttemptRef.current = 0; // contourne l'anti-rafale : c'est une action volontaire
+        startMicMonitor();
+    }, [audioInputId, stopMicMonitor, startMicMonitor]);
 
     // Certains navigateurs n'autorisent l'audio qu'après une interaction
     useEffect(() => {
@@ -1115,19 +1260,22 @@ Texte à analyser :
     }, [startMicMonitor]);
 
     const detectSilence = () => {
+        // Un rappel déjà planifié peut s'exécuter après l'arrêt : il ne doit
+        // pas réécrire le compteur remis à zéro.
+        if (!isListeningRef.current) return;
         if (!analyserRef.current || !dataArrayRef.current) return;
-        analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+        analyserRef.current.getFloatTimeDomainData(dataArrayRef.current);
 
-        // Moyenne du spectre = niveau affiché par le VU-mètre
-        const average = getAverageLevel(dataArrayRef.current);
+        // Niveau RMS (0..128) = niveau affiché par le VU-mètre
+        const average = getRmsLevel(dataArrayRef.current);
 
         // Update volume meter state
         setVolumeLevel(average);
 
-        // Seuil de silence (10 = très calme) — délai réglable dans les Paramètres
+        // Seuil de silence (sur l'échelle du VU-mètre) et délai : réglables dans les Paramètres
         const silenceLimit = silenceTimeoutRef.current;
         if (autoStopSilenceRef.current) {
-            if (average < 10) {
+            if (average < silenceThresholdRef.current) {
                 if (!silenceStartRef.current) {
                     silenceStartRef.current = Date.now();
                 } else {
@@ -1159,6 +1307,8 @@ Texte à analyser :
     };
 
     const startRecording = async () => {
+        const attempt = ++startAttemptRef.current;
+        startingRef.current = true;
         try {
             // Check Whisper Server before starting
             if (transcriptionMode === 'post' && transcriptionEngine === 'whisper') {
@@ -1171,6 +1321,13 @@ Texte à analyser :
                         if (!proceed) return;
                     }
                 }
+            }
+
+            // Le mode Live utilise la reconnaissance vocale du navigateur, qui
+            // est verrouillée sur le micro par défaut de l'OS : le choix de
+            // source n'a d'effet que sur le fichier audio exporté.
+            if (transcriptionMode === 'live' && (audioSource !== 'mic' || audioInputId)) {
+                showNotification("Mode Live : la transcription utilise le micro par défaut de Windows. Utilisez le mode Post pour transcrire l'audio système ou une autre entrée.");
             }
 
             // 1. Start Speech Recognition ONLY if in 'live' mode
@@ -1187,63 +1344,108 @@ Texte à analyser :
             audioChunksRef.current = [];
             isAutoSavingRef.current = false; // Reset auto-save flag
 
-            // 2. Setup Audio Recording (Mic + System)
+            // 2. Setup Audio Recording selon la source choisie
+            //    ('mic' | 'system' | 'both')
+            // Enregistré dans la ref dès le départ (même tableau, alimenté au fur
+            // et à mesure) : si une étape échoue, le catch peut ainsi libérer les
+            // flux déjà ouverts (micro, partage d'écran) au lieu de les laisser actifs.
             const streams = [];
+            streamsRef.current = streams;
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
             audioContextRef.current = audioContext;
 
+            // Arrêt demandé pendant une attente d'autorisation (stopRecording a
+            // invalidé cette tentative) : on libère ce qui vient d'être ouvert
+            // et on abandonne, sans démarrer un enregistrement que l'interface
+            // ne pourrait plus arrêter.
+            const abortIfCancelled = (...openedStreams) => {
+                if (startAttemptRef.current === attempt) return;
+                [...openedStreams, ...streams].forEach(stream => stream.getTracks().forEach(track => track.stop()));
+                if (audioContext.state !== 'closed') audioContext.close().catch(() => { });
+                throw START_CANCELLED;
+            };
+
             const dest = audioContext.createMediaStreamDestination();
+            // Bus de mixage : un MediaStreamAudioDestinationNode n'a aucune
+            // sortie (on ne peut pas le brancher sur l'analyseur), donc les
+            // sources passent par ce gain qui alimente à la fois l'enregistreur
+            // et l'analyseur.
+            const mixer = audioContext.createGain();
+            mixer.connect(dest);
 
-            // Mic Stream (Always needed for recording voice)
-            const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const micSource = audioContext.createMediaStreamSource(micStream);
-            micSource.connect(dest);
-            streams.push(micStream);
+            // Microphone (uniquement si la source le demande)
+            if (needsMic(audioSource)) {
+                const micStream = await openMicStream();
+                abortIfCancelled(micStream);
+                audioContext.createMediaStreamSource(micStream).connect(mixer);
+                streams.push(micStream);
+            }
 
-            // System Audio Stream (Optional)
-            if (enableSystemAudio) {
+            // Audio système / onglet (uniquement si la source le demande)
+            if (needsSystemAudio(audioSource)) {
+                const onlySystem = !needsMic(audioSource);
                 try {
-                    const sysStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-                    const sysSource = audioContext.createMediaStreamSource(sysStream);
-                    sysSource.connect(dest);
-                    streams.push(sysStream);
+                    const sysStream = await navigator.mediaDevices.getDisplayMedia(getDisplayAudioConstraints());
+                    abortIfCancelled(sysStream);
 
-                    // Chrome ne fournit l'audio que pour un ONGLET : partager un
-                    // écran ou une fenêtre entière donne une piste vidéo sans
-                    // aucune piste audio (l'enregistrement serait muet, hormis
-                    // le microphone).
+                    // Chrome ne fournit l'audio que pour un ONGLET (case « Partager
+                    // l'audio » cochée) ou l'écran entier avec le son système :
+                    // une fenêtre, ou un partage sans la case, donne une piste
+                    // vidéo sans aucune piste audio. À vérifier AVANT de brancher
+                    // le flux : createMediaStreamSource() lève une erreur cryptique
+                    // (« MediaStream has no audio track ») sur un flux sans audio.
                     if (sysStream.getAudioTracks().length === 0) {
-                        showNotification("⚠️ Aucun audio partagé : choisissez un ONGLET et cochez « Partager l'audio ».");
+                        // Rien d'audio à garder : on coupe le partage tout de suite
+                        // (sinon l'indicateur de partage de Chrome reste allumé).
+                        sysStream.getTracks().forEach(track => track.stop());
+                        if (onlySystem) {
+                            // Rien d'autre à enregistrer : on prévient clairement
+                            // au lieu de produire un fichier muet.
+                            throw new Error("Aucun audio partagé. Dans la fenêtre de partage, choisissez un ONGLET (ou l'écran entier) et cochez « Partager l'audio ». Une fenêtre seule n'a pas de son.");
+                        }
+                        showNotification("⚠️ Aucun audio partagé : seul le microphone sera enregistré. Choisissez un ONGLET et cochez « Partager l'audio ».");
                     } else {
-                        showNotification("Audio système ajouté au microphone.");
-                    }
+                        audioContext.createMediaStreamSource(sysStream).connect(mixer);
+                        streams.push(sysStream);
+                        showNotification(onlySystem
+                            ? "Audio système capté."
+                            : "Audio système ajouté au microphone.");
 
-                    // L'utilisateur peut arrêter le partage depuis la barre Chrome
-                    // (l'événement 'ended' ne se déclenche pas sur un track.stop())
-                    sysStream.getVideoTracks().forEach(track => {
-                        track.addEventListener('ended', () => {
-                            if (isListeningRef.current) {
-                                showNotification("Partage d'écran terminé : seul le microphone est encore enregistré.");
-                            }
+                        // L'utilisateur peut arrêter le partage depuis la barre Chrome
+                        // (l'événement 'ended' ne se déclenche pas sur un track.stop())
+                        sysStream.getVideoTracks().forEach(track => {
+                            track.addEventListener('ended', () => {
+                                if (isListeningRef.current) {
+                                    showNotification("Partage terminé : l'audio système n'est plus enregistré.");
+                                }
+                            });
                         });
-                    });
+                    }
                 } catch (err) {
+                    if (err === START_CANCELLED) throw err; // pas une erreur de partage
                     console.warn("System audio selection cancelled or failed:", err);
+                    if (onlySystem) {
+                        // Source « système seul » : sans partage, il n'y a rien
+                        // à enregistrer — on remonte l'erreur au catch global.
+                        throw new Error(err.message || "Capture audio système refusée ou annulée. Choisissez une autre source.");
+                    }
                     logError("Audio système refusé/annulé.");
                     showNotification("Capture audio système annulée. Seul le microphone sera enregistré.");
                 }
             }
 
-            streamsRef.current = streams;
+            if (streams.length === 0) {
+                throw new Error("Aucune source audio active (microphone et audio système indisponibles).");
+            }
 
             // Audio Analysis Setup — branché sur le MIXAGE réellement enregistré
             // (micro + audio système) : le VU-mètre et l'arrêt automatique sur
             // silence reflètent donc ce qui est capturé, et non le seul micro.
             const analyser = audioContext.createAnalyser();
-            analyser.fftSize = 256;
-            dest.connect(analyser); // Alimenté par toutes les sources du mixage
+            analyser.fftSize = 2048; // fenêtre de ~43 ms : assez longue pour un RMS stable
+            mixer.connect(analyser); // Alimenté par toutes les sources du mixage
             analyserRef.current = analyser;
-            dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
+            dataArrayRef.current = new Float32Array(analyser.fftSize);
             silenceStartRef.current = null;
             setVolumeLevel(0); // Reset volume level
 
@@ -1257,7 +1459,9 @@ Texte à analyser :
                 }
             };
             recorder.onstop = () => {
-                const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                // Type réel produit par le navigateur (WebM sous Chrome/Firefox, MP4
+                // sous Safari), sans les paramètres de codec (« ;codecs=opus »).
+                const blob = new Blob(audioChunksRef.current, { type: normalizeAudioMimeType(recorder.mimeType) });
                 setAudioBlob(blob);
 
                 // Cleanup Utils
@@ -1275,14 +1479,43 @@ Texte à analyser :
             mediaRecorderRef.current = recorder;
 
         } catch (err) {
-            logError(err, "Microphone");
+            // Arrêt utilisateur pendant le démarrage : stopRecording() a déjà tout
+            // remis à zéro (et une nouvelle tentative a pu démarrer entre-temps,
+            // dont on ne doit surtout pas toucher aux flux).
+            if (err === START_CANCELLED) return;
+
+            // Nettoyage : aucun flux ni AudioContext ne doit rester orphelin
+            // (cas d'un partage annulé en source « système seul », par exemple).
+            // La reconnaissance vocale du mode Live démarre avant la capture audio :
+            // sans cet arrêt, elle continuerait d'écouter malgré l'erreur.
+            if (recognitionRef.current) {
+                try { recognitionRef.current.stop(); } catch (e) { /* pas démarrée */ }
+            }
+            stopMediaTracks();
+            if (audioContextRef.current) {
+                const ctx = audioContextRef.current;
+                if (ctx.state !== 'closed') ctx.close().catch(() => { });
+                audioContextRef.current = null;
+            }
+            analyserRef.current = null;
+            dataArrayRef.current = null;
+            setVolumeLevel(0);
+
+            logError(err, "Audio");
             setIsListening(false);
             isListeningRef.current = false;
-            showNotification("Erreur microphone/audio : " + (err.message || err));
+            showNotification("Erreur audio : " + (err.message || err));
+        } finally {
+            // Ne libère le verrou que si aucune tentative plus récente n'a pris le relais
+            if (startAttemptRef.current === attempt) startingRef.current = false;
         }
     };
 
     const stopRecording = (autoSave = false) => {
+        // Invalide un démarrage encore en attente d'autorisation (voir startRecording)
+        startAttemptRef.current += 1;
+        startingRef.current = false;
+
         if (autoSave) {
             isAutoSavingRef.current = true;
         }
@@ -1330,6 +1563,8 @@ Texte à analyser :
 
     const toggleListening = () => {
         if (!isListening) {
+            // Double-clic : un démarrage est déjà en cours (contrôle du serveur, autorisations)
+            if (startingRef.current) return;
             // Reset uploaded file if we start recording
             setUploadedFile(null);
             startRecording();
@@ -1393,17 +1628,12 @@ Texte à analyser :
             showNotification("Pas de texte à sauvegarder.");
             return;
         }
-        const element = document.createElement('a');
         const file = new Blob([textToSave], { type: 'text/plain' });
-        element.href = URL.createObjectURL(file);
         const sanitizedFilename = sanitizeFilename(customFilename.trim());
         const fileName = sanitizedFilename
             ? `${sanitizedFilename}.txt`
             : `transcription-${new Date().toISOString().slice(0, 10)}.txt`;
-        element.download = fileName;
-        document.body.appendChild(element);
-        element.click();
-        document.body.removeChild(element);
+        saveBlobAs(file, fileName);
     };
 
     const downloadAudio = () => {
@@ -1412,18 +1642,13 @@ Texte à analyser :
             console.warn("downloadAudio: No blob in Ref");
             return;
         }
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
+        // Extension réelle : un fichier importé (MP3, WAV…) ne doit pas devenir « .webm »
+        const extension = getAudioExtension(blob);
         const sanitizedFilename = sanitizeFilename(customFilename.trim());
         const fileName = sanitizedFilename
-            ? `${sanitizedFilename}.webm`
-            : `recording-${new Date().toISOString().slice(0, 10)}.webm`;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
+            ? `${sanitizedFilename}.${extension}`
+            : `recording-${new Date().toISOString().slice(0, 10)}.${extension}`;
+        saveBlobAs(blob, fileName);
         showNotification("Fichier Audio téléchargé !");
     };
 
@@ -1433,18 +1658,11 @@ Texte à analyser :
 
         const content = logs.join('\n');
         const blob = new Blob([content], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
         const sanitizedFilename = sanitizeFilename(customFilename.trim());
         const fileName = sanitizedFilename
             ? `${sanitizedFilename}-errors.log`
             : `error-log-${new Date().toISOString().slice(0, 10)}.log`;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
+        saveBlobAs(blob, fileName);
         showNotification("Fichier de logs téléchargé !");
     };
 
@@ -1554,6 +1772,8 @@ Texte à analyser :
         setTranscriptionTime(0);
         setAiProcessingTime(0);
         setCustomFilename('');
+        silenceStartRef.current = null;
+        setSilenceCountdown(silenceTimeoutRef.current); // compteur d'arrêt auto à sa valeur initiale
         showNotification("Session effacée.");
     };
 
@@ -1815,18 +2035,20 @@ Texte à analyser :
                                 </button>
                             </div>
 
-                            <button
-                                onClick={() => setEnableSystemAudio(!enableSystemAudio)}
-                                disabled={isListening}
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 border ${enableSystemAudio
-                                    ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-                                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600'
-                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                            <div
+                                className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-gray-100 dark:bg-gray-700 border-gray-200 dark:border-gray-600"
+                                title="D'où vient le son : une entrée audio (micro, Stereo Mix…), le partage d'un onglet ou d'un écran, ou les deux"
                             >
-                                <Speaker className="w-4 h-4" />
-                                <span className="hidden sm:inline">{enableSystemAudio ? 'Audio système activé' : 'Audio système désactivé'}</span>
-                                <span className="sm:hidden">{enableSystemAudio ? 'Audio activé' : 'Audio désactivé'}</span>
-                            </button>
+                                <Speaker className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                                <AudioSourceSelect
+                                    audioSource={audioSource}
+                                    audioInputId={audioInputId}
+                                    audioInputs={audioInputs}
+                                    onChange={handleAudioChoice}
+                                    disabled={isListening}
+                                    className="bg-transparent text-sm font-medium text-gray-700 dark:text-gray-200 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer max-w-[12rem] sm:max-w-[20rem] truncate"
+                                />
+                            </div>
 
                             {/* Auto Stop Silence Toggle */}
                             <button
@@ -1888,7 +2110,17 @@ Texte à analyser :
                         </div>
 
                         {/* Audio Level Meter — alimenté en permanence (surveillance micro continue) */}
-                        <AudioLevelMeter isListening={isListening} volumeLevel={volumeLevel} status={micMonitorStatus} />
+                        <AudioLevelMeter
+                            isListening={isListening}
+                            volumeLevel={volumeLevel}
+                            status={micMonitorStatus}
+                            threshold={autoStopSilence ? silenceThreshold : null}
+                            label={isListening && audioSource === 'system'
+                                ? 'audio système'
+                                : isListening && audioSource === 'both'
+                                    ? `${audioInputLabel} + système`
+                                    : audioInputLabel}
+                        />
                     </div>
 
                     {/* Post-Processing Transcription Trigger */}
@@ -1996,7 +2228,7 @@ Texte à analyser :
                                         <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
                                         <span className="text-sm font-medium">
                                             Écoute en cours
-                                            {enableSystemAudio && ' (+ Audio Système)'}
+                                            {needsSystemAudio(audioSource) && (needsMic(audioSource) ? ' (+ Audio Système)' : ' (Audio Système seul)')}
                                             ...
                                         </span>
                                     </div>
@@ -2380,6 +2612,8 @@ Texte à analyser :
                 setAutoStopSilence={setAutoStopSilence}
                 silenceTimeout={silenceTimeout}
                 setSilenceTimeout={setSilenceTimeout}
+                silenceThreshold={silenceThreshold}
+                setSilenceThreshold={setSilenceThreshold}
                 maxRecordingMinutes={maxRecordingMinutes}
                 setMaxRecordingMinutes={setMaxRecordingMinutes}
             />

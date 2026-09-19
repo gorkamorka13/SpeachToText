@@ -20,6 +20,14 @@ Une plateforme web de pointe pour la transcription, la traduction et l'analyse i
 - **Agent Personnalisable** : Modifiez les instructions et le modèle (modèles gratuits Flash, ou tout modèle via « Autre modèle... ») directement dans l'interface.
 - **Multi-fournisseurs gratuit** : Gemini (audio + analyse + traduction) ou OpenRouter (analyse + traduction, modèles `:free`).
 
+### 🎚️ Sources Audio
+- **Liste unique « source audio »** (barre d'outils, icône haut-parleur) : choisissez d'où vient le son — une **entrée audio** (micro Realtek, webcam, **Stereo Mix**…, ou l'entrée par défaut de Windows), **🖥️ Audio système / onglet** (partage d'un onglet ou d'un écran), ou **🔀 entrée + onglet**. Le choix est mémorisé et verrouillé pendant l'enregistrement ; le vu-mètre affiche le nom de l'entrée mesurée.
+- **Audio système** : capture le son d'un **onglet** du navigateur (Chrome, Edge, Firefox) — choisissez un onglet et cochez « Partager l'audio ». L'app vous **avertit** si le partage ne contient aucune piste audio (cas d'un écran entier partagé sous Chrome), et en source « système seul », un partage annulé **annule l'enregistrement** au lieu de produire un fichier muet.
+- **Enregistrer le son du PC sans micro** (vidéo, lecteur, appel) : activez **Stereo Mix** dans Windows (Paramètres du son → Plus de paramètres de son → Enregistrement → clic droit → *Afficher les périphériques désactivés* → *Stereo Mix* → *Activer*), puis choisissez-le dans la liste (« 🔊 Stereo Mix · son du PC »). Il ne capte que ce qui sort sur les haut-parleurs de **sa** carte son (pas ceux d'un écran HDMI) : envoyez le lecteur vers cette sortie dans le mélangeur de volume de Windows. Pour ce type d'entrée, l'annulation d'écho et la suppression de bruit sont coupées afin de ne pas altérer la musique ou les vidéos.
+- **Le contrôle automatique du gain est désactivé** sur les flux micro : sous Chrome/Windows, il réécrit sinon le volume d'entrée de Windows en continu.
+- **Le VU-mètre et l'arrêt sur silence mesurent le mixage réellement enregistré** (micro + audio système), pas seulement le micro.
+- ⚠️ **Limites** : Safari ne fournit **aucun** audio système (utilisez le microphone) ; le mode **Live** (`SpeechRecognition`) est verrouillé sur le micro par défaut de l'OS — pour transcrire l'audio système, utilisez le mode **Post** (Gemini/Whisper traitent le mixage). En source « Micro + Système » avec haut-parleurs, la même voix peut être captée deux fois : un casque est conseillé.
+
 ### ⏱️ Automatisation & Exports
 - **Nommage Personnalisé** : Nouveau champ "Nom du fichier" pour personnaliser vos exports TXT, PDF, Word et Audio.
 - **PDF Professionnel** :
