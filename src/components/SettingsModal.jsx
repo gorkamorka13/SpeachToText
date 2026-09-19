@@ -1,6 +1,12 @@
 import React, { memo, useCallback, useState } from 'react';
-import { Settings, X, FileText, Info, Bot } from 'lucide-react';
+import { Settings, X, FileText, Info, Bot, Clock } from 'lucide-react';
 import { testAIConnection } from '../services/providers/providerFactory';
+import {
+  SILENCE_TIMEOUT_OPTIONS,
+  MAX_RECORDING_OPTIONS,
+  DEFAULT_SILENCE_TIMEOUT,
+  DEFAULT_MAX_RECORDING_MINUTES
+} from '../utils/audioUtils';
 
 const GEMINI_MODELS = [
   { value: 'gemini-3.1-flash-lite', label: '⚡ Gemini 3.1 Flash Lite (Rapide, gratuit)' },
@@ -39,7 +45,15 @@ const SettingsModal = memo(({
   openrouterModel,
   setOpenrouterModel,
   geminiApiKey,
-  setGeminiApiKey
+  setGeminiApiKey,
+  // Réglages d'enregistrement (valeurs par défaut pour rester compatible
+  // avec un usage sans props explicites)
+  autoStopSilence = true,
+  setAutoStopSilence = () => { },
+  silenceTimeout = DEFAULT_SILENCE_TIMEOUT,
+  setSilenceTimeout = () => { },
+  maxRecordingMinutes = DEFAULT_MAX_RECORDING_MINUTES,
+  setMaxRecordingMinutes = () => { }
 }) => {
   // Hooks BEFORE any conditional return (rules of hooks — the modal can be
   // mounted with show=false and then toggled to true).
@@ -287,6 +301,66 @@ const SettingsModal = memo(({
               />
               <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 rounded-full peer peer-checked:bg-purple-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
             </label>
+          </div>
+        </div>
+
+        {/* Recording Configuration */}
+        <div className="mb-6 pt-4 border-t border-gray-100 dark:border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-purple-500" />
+            Enregistrement
+          </h3>
+
+          <div className="mb-3">
+            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+              Durée maximale d'enregistrement
+            </label>
+            <select
+              value={maxRecordingMinutes}
+              onChange={(e) => setMaxRecordingMinutes(Number(e.target.value))}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            >
+              {MAX_RECORDING_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              À l'échéance, l'enregistrement s'arrête puis est sauvegardé automatiquement (1 heure par défaut).
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/30 p-3 rounded-lg border border-gray-100 dark:border-gray-700 mb-3">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Arrêt automatique sur silence</span>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={autoStopSilence}
+                onChange={(e) => setAutoStopSilence(e.target.checked)}
+              />
+              <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 rounded-full peer peer-checked:bg-purple-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+            </label>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+              Arrêt après un silence de
+            </label>
+            <select
+              value={silenceTimeout}
+              onChange={(e) => setSilenceTimeout(Number(e.target.value))}
+              disabled={!autoStopSilence}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {SILENCE_TIMEOUT_OPTIONS.map(seconds => (
+                <option key={seconds} value={seconds}>
+                  {seconds} secondes{seconds === DEFAULT_SILENCE_TIMEOUT ? ' (défaut)' : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              L'enregistrement s'arrête et est sauvegardé après ce temps sans son détecté (30, 40 ou 50 s).
+            </p>
           </div>
         </div>
 

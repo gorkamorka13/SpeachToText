@@ -15,7 +15,14 @@ import AiErrorModal from './components/AiErrorModal';
 // Services & Utils
 import { callGemini, extractTextFromResponse, transcribeWithWhisper, fileToGenerativePart, setGeminiApiKey } from './services/aiService';
 import { callModel, translateWithAI } from './services/providers/providerFactory';
-import { trimSilence } from './utils/audioUtils';
+import {
+    trimSilence,
+    getAverageLevel,
+    parseSilenceTimeout,
+    parseMaxRecordingMinutes,
+    isRecordingLimitReached,
+    formatRecordingLimit
+} from './utils/audioUtils';
 import { sanitizeInput, sanitizeFilename, validateFileType, escapeHtml, sanitizeAIInstructions } from './utils/securityUtils';
 import { generatePDF, downloadDOCX } from './services/exportService';
 
@@ -98,9 +105,22 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
     });
     const [customFilename, setCustomFilename] = useState('');
     const [audioBlob, setAudioBlob] = useState(null);
-    const [autoStopSilence, setAutoStopSilence] = useState(true);
-    const [silenceCountdown, setSilenceCountdown] = useState(50);
+    const [autoStopSilence, setAutoStopSilence] = useState(() => {
+        const saved = localStorage.getItem('autoStopSilence');
+        return saved !== null ? saved === 'true' : true;
+    });
+    // Délai de silence (s) avant arrêt automatique : 30, 40 (défaut) ou 50
+    const [silenceTimeout, setSilenceTimeout] = useState(() => {
+        return parseSilenceTimeout(localStorage.getItem('silenceTimeout'));
+    });
+    const [silenceCountdown, setSilenceCountdown] = useState(silenceTimeout);
+    // Durée maximale d'enregistrement (minutes, 0 = illimité) : 1 h par défaut
+    const [maxRecordingMinutes, setMaxRecordingMinutes] = useState(() => {
+        return parseMaxRecordingMinutes(localStorage.getItem('maxRecordingMinutes'));
+    });
     const [volumeLevel, setVolumeLevel] = useState(0);
+    // 'idle' | 'live' | 'denied' | 'error' | 'unsupported' — état du VU-mètre permanent
+    const [micMonitorStatus, setMicMonitorStatus] = useState('idle');
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [showEmailModal, setShowEmailModal] = useState(false);
     const [hasDownloadedPDF, setHasDownloadedPDF] = useState(false);
@@ -147,11 +167,29 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
 
     const silenceTimerRef = useRef(null);
     const silenceStartRef = useRef(null);
+    // Valeurs « fraîches » pour les boucles rAF / minuteurs (closures figées
+    // au démarrage de l'enregistrement)
+    const autoStopSilenceRef = useRef(autoStopSilence);
+    const silenceTimeoutRef = useRef(silenceTimeout);
+    const maxRecordingMinutesRef = useRef(maxRecordingMinutes);
+    const maxDurationReachedRef = useRef(false);
+    const stopRecordingRef = useRef(null);
     const isAutoSavingRef = useRef(false);
     const analyserRef = useRef(null);
     const audioContextRef = useRef(null); // Keep ref to close it
     const dataArrayRef = useRef(null);
     const animationFrameRef = useRef(null);
+
+    // Surveillance permanente du niveau d'entrée (indépendante de l'enregistrement)
+    const micMonitorStreamRef = useRef(null);
+    const micMonitorContextRef = useRef(null);
+    const micMonitorAnalyserRef = useRef(null);
+    const micMonitorDataRef = useRef(null);
+    const micMonitorFrameRef = useRef(null);
+    const micMonitorStartingRef = useRef(false);
+    const micMonitorDisposedRef = useRef(false);
+    const micMonitorLastAttemptRef = useRef(0);
+    const micMonitorWarnedRef = useRef('');
 
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
@@ -347,6 +385,26 @@ Ton objectif est de produire une version propre, lisible et intégrale en respec
     useEffect(() => {
         localStorage.setItem('enableSystemAudio', enableSystemAudio);
     }, [enableSystemAudio]);
+
+    useEffect(() => {
+        localStorage.setItem('autoStopSilence', autoStopSilence);
+    }, [autoStopSilence]);
+
+    // Réglages de durée : persistés et reflétés dans les refs des boucles
+    useEffect(() => {
+        localStorage.setItem('silenceTimeout', silenceTimeout);
+        silenceTimeoutRef.current = silenceTimeout;
+        setSilenceCountdown(silenceTimeout); // le compteur affiché repart du délai choisi
+    }, [silenceTimeout]);
+
+    useEffect(() => {
+        localStorage.setItem('maxRecordingMinutes', maxRecordingMinutes);
+        maxRecordingMinutesRef.current = maxRecordingMinutes;
+    }, [maxRecordingMinutes]);
+
+    useEffect(() => {
+        autoStopSilenceRef.current = autoStopSilence;
+    }, [autoStopSilence]);
 
     // Auto-scroll Transcript
     useEffect(() => {
@@ -799,13 +857,25 @@ Texte à analyser :
     useEffect(() => {
         let interval;
         if (isListening) {
+            // Compteur local : évite de dépendre de l'état `duration` et permet
+            // d'appliquer la durée maximale réglée dans les Paramètres.
+            let elapsed = 0;
+            maxDurationReachedRef.current = false;
             interval = setInterval(() => {
-                setDuration(prev => prev + 1);
+                elapsed += 1;
+                setDuration(elapsed);
+
+                const limitMinutes = maxRecordingMinutesRef.current;
+                if (!maxDurationReachedRef.current && isRecordingLimitReached(elapsed, limitMinutes)) {
+                    maxDurationReachedRef.current = true;
+                    showNotification(`Durée maximale atteinte (${formatRecordingLimit(limitMinutes)}). Arrêt et sauvegarde...`);
+                    stopRecordingRef.current?.(true); // arrêt + sauvegarde/transcription
+                }
             }, 1000);
         }
         // Duration is NOT reset to 0 here so it persists in the UI after stopping
         return () => clearInterval(interval);
-    }, [isListening]);
+    }, [isListening, showNotification]);
 
     const formatDuration = (seconds) => {
         const mins = Math.floor(seconds / 60);
@@ -886,48 +956,200 @@ Texte à analyser :
         streamsRef.current = [];
     }, []);
 
+    // ------------------------------------------------------------------
+    // Surveillance permanente du niveau d'entrée (« Niveau Signal »)
+    // Le VU-mètre doit rester vivant en permanence, pas seulement pendant
+    // un enregistrement : on garde donc un flux micro + un AudioContext
+    // dédiés, indépendants de ceux créés par startRecording().
+    // ------------------------------------------------------------------
+    const stopMicMonitor = useCallback(() => {
+        if (micMonitorFrameRef.current) {
+            cancelAnimationFrame(micMonitorFrameRef.current);
+            micMonitorFrameRef.current = null;
+        }
+        if (micMonitorStreamRef.current) {
+            micMonitorStreamRef.current.getTracks().forEach(track => track.stop());
+            micMonitorStreamRef.current = null;
+        }
+        if (micMonitorContextRef.current) {
+            const ctx = micMonitorContextRef.current;
+            if (ctx.state !== 'closed') ctx.close().catch(() => { });
+            micMonitorContextRef.current = null;
+        }
+        micMonitorAnalyserRef.current = null;
+        micMonitorDataRef.current = null;
+    }, []);
+
+    const micMonitorLoop = useCallback(() => {
+        // Pendant l'enregistrement, c'est detectSilence() qui pilote le
+        // VU-mètre (il mesure le mixage réellement enregistré) : on laisse
+        // simplement la boucle tourner au repos, sans écraser la valeur.
+        if (isListeningRef.current) {
+            micMonitorFrameRef.current = requestAnimationFrame(micMonitorLoop);
+            return;
+        }
+
+        const analyser = micMonitorAnalyserRef.current;
+        const data = micMonitorDataRef.current;
+        if (!analyser || !data) return;
+
+        analyser.getByteFrequencyData(data);
+        setVolumeLevel(getAverageLevel(data));
+        micMonitorFrameRef.current = requestAnimationFrame(micMonitorLoop);
+    }, []);
+
+    const startMicMonitor = useCallback(async () => {
+        if (micMonitorDisposedRef.current) return;
+        if (micMonitorStreamRef.current || micMonitorStartingRef.current) return; // déjà actif
+        if (!navigator.mediaDevices?.getUserMedia) {
+            setMicMonitorStatus('unsupported');
+            return;
+        }
+        // Anti-rafale : une tentative toutes les 1,5 s maximum (ex. permission
+        // refusée + clics répétés de l'utilisateur).
+        const now = Date.now();
+        if (now - micMonitorLastAttemptRef.current < 1500) return;
+        micMonitorLastAttemptRef.current = now;
+
+        micMonitorStartingRef.current = true;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            // Composant démonté pendant l'acquisition (StrictMode, navigation) :
+            // on libère immédiatement le micro.
+            if (micMonitorDisposedRef.current) {
+                stream.getTracks().forEach(track => track.stop());
+                return;
+            }
+            micMonitorStreamRef.current = stream;
+
+            const context = new (window.AudioContext || window.webkitAudioContext)();
+            micMonitorContextRef.current = context;
+            // Les navigateurs créent l'AudioContext en 'suspended' tant que
+            // l'utilisateur n'a pas interagi : on tente un resume() immédiat,
+            // sinon l'effet « premier geste » s'en chargera.
+            if (context.state === 'suspended') {
+                try { await context.resume(); } catch (e) { /* geste utilisateur requis */ }
+            }
+
+            const source = context.createMediaStreamSource(stream);
+            const analyser = context.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser); // Jamais connecté à destination : aucun retour audio
+
+            micMonitorAnalyserRef.current = analyser;
+            micMonitorDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+            micMonitorWarnedRef.current = ''; // ré-armement des avertissements
+            setMicMonitorStatus('live');
+
+            if (micMonitorFrameRef.current) cancelAnimationFrame(micMonitorFrameRef.current);
+            micMonitorFrameRef.current = requestAnimationFrame(micMonitorLoop);
+
+            // Le micro est désormais autorisé : on peut relancer la surveillance
+            // si elle avait échoué (permission refusée puis ré-autorisée).
+        } catch (err) {
+            // Pas de notification : l'enregistrement reste possible et
+            // redemandera l'autorisation au moment voulu.
+            const errName = err?.name || err?.message || 'Error';
+            if (micMonitorWarnedRef.current !== errName) {
+                console.warn("Niveau signal indisponible:", errName);
+                micMonitorWarnedRef.current = errName;
+            }
+            setMicMonitorStatus(errName === 'NotAllowedError' ? 'denied' : 'error');
+        } finally {
+            micMonitorStartingRef.current = false;
+        }
+    }, [micMonitorLoop]);
+
+    // Démarrage de la surveillance (et suivi des périphériques ajoutés/retirés)
+    useEffect(() => {
+        // Remis à false après un éventuel démontage (StrictMode en dev)
+        micMonitorDisposedRef.current = false;
+        startMicMonitor();
+
+        const md = navigator.mediaDevices;
+        const handleDeviceChange = () => {
+            if (!micMonitorStreamRef.current) startMicMonitor();
+        };
+        if (md?.addEventListener) md.addEventListener('devicechange', handleDeviceChange);
+
+        // Réagit immédiatement si l'utilisateur ré-autorise le micro depuis la
+        // barre d'adresse (non supporté partout : silencieusement ignoré).
+        let permissionStatus = null;
+        const handlePermissionChange = () => {
+            if (permissionStatus?.state === 'granted' && !micMonitorStreamRef.current) {
+                micMonitorLastAttemptRef.current = 0; // autorise une tentative immédiate
+                startMicMonitor();
+            }
+        };
+        if (navigator.permissions?.query) {
+            navigator.permissions.query({ name: 'microphone' })
+                .then(status => {
+                    permissionStatus = status;
+                    status.addEventListener?.('change', handlePermissionChange);
+                })
+                .catch(() => { /* 'microphone' non interrogeable (Safari) */ });
+        }
+
+        return () => {
+            micMonitorDisposedRef.current = true;
+            if (md?.removeEventListener) md.removeEventListener('devicechange', handleDeviceChange);
+            permissionStatus?.removeEventListener?.('change', handlePermissionChange);
+            stopMicMonitor();
+        };
+    }, [startMicMonitor, stopMicMonitor]);
+
+    // Certains navigateurs n'autorisent l'audio qu'après une interaction
+    useEffect(() => {
+        const resume = () => {
+            const ctx = micMonitorContextRef.current;
+            if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => { });
+            if (!micMonitorStreamRef.current) startMicMonitor();
+        };
+        window.addEventListener('pointerdown', resume);
+        window.addEventListener('keydown', resume);
+        return () => {
+            window.removeEventListener('pointerdown', resume);
+            window.removeEventListener('keydown', resume);
+        };
+    }, [startMicMonitor]);
+
     const detectSilence = () => {
         if (!analyserRef.current || !dataArrayRef.current) return;
         analyserRef.current.getByteFrequencyData(dataArrayRef.current);
 
-        // Calculate average volume
-        const array = dataArrayRef.current;
-        let values = 0;
-        const length = array.length;
-        for (let i = 0; i < length; i++) {
-            values += array[i];
-        }
-        const average = values / length;
+        // Moyenne du spectre = niveau affiché par le VU-mètre
+        const average = getAverageLevel(dataArrayRef.current);
 
         // Update volume meter state
         setVolumeLevel(average);
 
-        // Threshold for silence (adjustable, 10 is usually very quiet)
-        // Only run auto-stop logic if enabled
-        if (autoStopSilence) {
+        // Seuil de silence (10 = très calme) — délai réglable dans les Paramètres
+        const silenceLimit = silenceTimeoutRef.current;
+        if (autoStopSilenceRef.current) {
             if (average < 10) {
                 if (!silenceStartRef.current) {
                     silenceStartRef.current = Date.now();
                 } else {
                     const silencedDuration = Date.now() - silenceStartRef.current;
-                    const remaining = Math.max(0, 50 - Math.floor(silencedDuration / 1000));
+                    const remaining = Math.max(0, silenceLimit - Math.floor(silencedDuration / 1000));
                     setSilenceCountdown(remaining);
 
-                    if (silencedDuration >50000) { //50 seconds
-                        // Silence detected for 50s
+                    if (silencedDuration >= silenceLimit * 1000) {
+                        // Silence détecté pendant toute la durée configurée
                         // Stop detection loop
                         cancelAnimationFrame(animationFrameRef.current);
 
-                        showNotification("Silence détecté (50s). Arrêt et sauvegarde...");
+                        showNotification(`Silence détecté (${silenceLimit}s). Arrêt et sauvegarde...`);
                         stopRecording(true); // Trigger auto-save
-                        setSilenceCountdown(50);
+                        setSilenceCountdown(silenceLimit);
                         return;
                     }
                 }
             } else {
                 // Reset silence timer if noise detected
                 silenceStartRef.current = null;
-                setSilenceCountdown(50);
+                setSilenceCountdown(silenceLimit);
             }
         }
 
@@ -985,6 +1207,26 @@ Texte à analyser :
                     const sysSource = audioContext.createMediaStreamSource(sysStream);
                     sysSource.connect(dest);
                     streams.push(sysStream);
+
+                    // Chrome ne fournit l'audio que pour un ONGLET : partager un
+                    // écran ou une fenêtre entière donne une piste vidéo sans
+                    // aucune piste audio (l'enregistrement serait muet, hormis
+                    // le microphone).
+                    if (sysStream.getAudioTracks().length === 0) {
+                        showNotification("⚠️ Aucun audio partagé : choisissez un ONGLET et cochez « Partager l'audio ».");
+                    } else {
+                        showNotification("Audio système ajouté au microphone.");
+                    }
+
+                    // L'utilisateur peut arrêter le partage depuis la barre Chrome
+                    // (l'événement 'ended' ne se déclenche pas sur un track.stop())
+                    sysStream.getVideoTracks().forEach(track => {
+                        track.addEventListener('ended', () => {
+                            if (isListeningRef.current) {
+                                showNotification("Partage d'écran terminé : seul le microphone est encore enregistré.");
+                            }
+                        });
+                    });
                 } catch (err) {
                     console.warn("System audio selection cancelled or failed:", err);
                     logError("Audio système refusé/annulé.");
@@ -994,10 +1236,12 @@ Texte à analyser :
 
             streamsRef.current = streams;
 
-            // Audio Analysis Setup (Always setup for volume meter)
+            // Audio Analysis Setup — branché sur le MIXAGE réellement enregistré
+            // (micro + audio système) : le VU-mètre et l'arrêt automatique sur
+            // silence reflètent donc ce qui est capturé, et non le seul micro.
             const analyser = audioContext.createAnalyser();
             analyser.fftSize = 256;
-            micSource.connect(analyser); // Connect mic to analyser
+            dest.connect(analyser); // Alimenté par toutes les sources du mixage
             analyserRef.current = analyser;
             dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
             silenceStartRef.current = null;
@@ -1077,6 +1321,12 @@ Texte à analyser :
         setIsListening(false);
         isListeningRef.current = false; // Sync Ref
     };
+
+    // Référence toujours à jour vers stopRecording (utilisée par le minuteur
+    // de durée maximale, dont la closure est figée au démarrage).
+    useEffect(() => {
+        stopRecordingRef.current = stopRecording;
+    });
 
     const toggleListening = () => {
         if (!isListening) {
@@ -1586,12 +1836,31 @@ Texte à analyser :
                                     ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800'
                                     : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600'
                                     } disabled:opacity-50 disabled:cursor-not-allowed`}
-                                title="Arrêter automatiquement après 50s de silence et sauvegarder"
+                                title={`Arrêter automatiquement après ${silenceTimeout}s de silence et sauvegarder (réglable dans les Paramètres)`}
                             >
                                 <div className={`w-3 h-3 rounded-full ${autoStopSilence ? 'bg-red-500' : 'bg-gray-400'}`}></div>
                                 <span className="hidden sm:inline">Arrêt auto ({silenceCountdown}s)</span>
                                 <span className="sm:hidden">{silenceCountdown}s</span>
                             </button>
+
+                            {/* Durée maximale d'enregistrement (Paramètres) */}
+                            <div
+                                className="px-4 py-2 rounded-lg text-sm font-medium border bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 flex items-center justify-center gap-2"
+                                title="Durée maximale d'enregistrement (modifiable dans les Paramètres)"
+                            >
+                                <Clock className="w-4 h-4" />
+                                {isListening && maxRecordingMinutes > 0 ? (
+                                    <>
+                                        <span className="hidden sm:inline">Reste {formatDuration(Math.max(0, maxRecordingMinutes * 60 - duration))}</span>
+                                        <span className="sm:hidden">{formatDuration(Math.max(0, maxRecordingMinutes * 60 - duration))}</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span className="hidden sm:inline">Max {formatRecordingLimit(maxRecordingMinutes)}</span>
+                                        <span className="sm:hidden">{maxRecordingMinutes > 0 ? formatRecordingLimit(maxRecordingMinutes) : '∞'}</span>
+                                    </>
+                                )}
+                            </div>
 
                             <button
                                 onClick={toggleListening}
@@ -1618,8 +1887,8 @@ Texte à analyser :
                             </button>
                         </div>
 
-                        {/* Audio Level Meter */}
-                        <AudioLevelMeter isListening={isListening} volumeLevel={volumeLevel} />
+                        {/* Audio Level Meter — alimenté en permanence (surveillance micro continue) */}
+                        <AudioLevelMeter isListening={isListening} volumeLevel={volumeLevel} status={micMonitorStatus} />
                     </div>
 
                     {/* Post-Processing Transcription Trigger */}
@@ -2107,6 +2376,12 @@ Texte à analyser :
                 setOpenrouterModel={setOpenrouterModel}
                 geminiApiKey={geminiApiKey}
                 setGeminiApiKey={setGeminiApiKeyState}
+                autoStopSilence={autoStopSilence}
+                setAutoStopSilence={setAutoStopSilence}
+                silenceTimeout={silenceTimeout}
+                setSilenceTimeout={setSilenceTimeout}
+                maxRecordingMinutes={maxRecordingMinutes}
+                setMaxRecordingMinutes={setMaxRecordingMinutes}
             />
 
             {/* Whisper Local Help Modal */}

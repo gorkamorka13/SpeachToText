@@ -29,7 +29,13 @@ const baseProps = {
     openrouterModel: 'google/gemma-3-27b-it:free',
     setOpenrouterModel: vi.fn(),
     geminiApiKey: '',
-    setGeminiApiKey: vi.fn()
+    setGeminiApiKey: vi.fn(),
+    autoStopSilence: true,
+    setAutoStopSilence: vi.fn(),
+    silenceTimeout: 40,
+    setSilenceTimeout: vi.fn(),
+    maxRecordingMinutes: 60,
+    setMaxRecordingMinutes: vi.fn()
 };
 
 beforeEach(() => {
@@ -86,6 +92,43 @@ describe('SettingsModal', () => {
 
         await waitFor(() => {
             expect(screen.getByText(/Clé manquante/i)).toBeInTheDocument();
+        });
+    });
+
+    describe('réglages d\'enregistrement', () => {
+        it('affiche la durée maximale et les choix d\'arrêt sur silence', () => {
+            render(<SettingsModal {...baseProps} />);
+
+            expect(screen.getByText('Enregistrement')).toBeInTheDocument();
+            // Durée maximale : 1 heure par défaut
+            expect(screen.getByDisplayValue('1 heure (défaut)')).toBeInTheDocument();
+            // Délai de silence : 30, 40 (défaut) et 50 s
+            // (getByRole : getByDisplayValue ne matche que l'option sélectionnée)
+            expect(screen.getByRole('option', { name: '30 secondes' })).toBeInTheDocument();
+            expect(screen.getByRole('option', { name: '40 secondes (défaut)' })).toBeInTheDocument();
+            expect(screen.getByRole('option', { name: '50 secondes' })).toBeInTheDocument();
+        });
+
+        it('remonte le changement de durée maximale', () => {
+            render(<SettingsModal {...baseProps} />);
+
+            fireEvent.change(screen.getByDisplayValue('1 heure (défaut)'), { target: { value: '120' } });
+
+            expect(baseProps.setMaxRecordingMinutes).toHaveBeenCalledWith(120);
+        });
+
+        it('remonte le changement de délai de silence', () => {
+            render(<SettingsModal {...baseProps} />);
+
+            fireEvent.change(screen.getByDisplayValue('40 secondes (défaut)'), { target: { value: '30' } });
+
+            expect(baseProps.setSilenceTimeout).toHaveBeenCalledWith(30);
+        });
+
+        it('désactive le choix du délai quand l\'arrêt sur silence est inactif', () => {
+            render(<SettingsModal {...baseProps} autoStopSilence={false} />);
+
+            expect(screen.getByDisplayValue('40 secondes (défaut)')).toBeDisabled();
         });
     });
 });

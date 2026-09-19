@@ -1,3 +1,72 @@
+// ---------------------------------------------------------------------------
+// Limites d'enregistrement (réglables dans les Paramètres)
+// ---------------------------------------------------------------------------
+
+/** Durées proposées (en secondes) avant l'arrêt automatique sur silence. */
+export const SILENCE_TIMEOUT_OPTIONS = [30, 40, 50];
+export const DEFAULT_SILENCE_TIMEOUT = 40;
+
+/** Durée maximale d'enregistrement proposée (minutes, 0 = illimité). */
+export const MAX_RECORDING_OPTIONS = [
+    { value: 15, label: '15 minutes' },
+    { value: 30, label: '30 minutes' },
+    { value: 45, label: '45 minutes' },
+    { value: 60, label: '1 heure (défaut)' },
+    { value: 90, label: '1 h 30' },
+    { value: 120, label: '2 heures' },
+    { value: 180, label: '3 heures' },
+    { value: 0, label: 'Illimité (non recommandé)' }
+];
+export const DEFAULT_MAX_RECORDING_MINUTES = 60;
+
+/** Lit le délai de silence mémorisé (repli sur le défaut si valeur inconnue). */
+export const parseSilenceTimeout = (raw) => {
+    const value = parseInt(raw, 10);
+    return SILENCE_TIMEOUT_OPTIONS.includes(value) ? value : DEFAULT_SILENCE_TIMEOUT;
+};
+
+/** Lit la durée maximale mémorisée (repli sur le défaut si valeur inconnue). */
+export const parseMaxRecordingMinutes = (raw) => {
+    if (raw === null || raw === undefined || raw === '') return DEFAULT_MAX_RECORDING_MINUTES;
+    const value = parseInt(raw, 10);
+    if (!Number.isFinite(value) || value < 0) return DEFAULT_MAX_RECORDING_MINUTES;
+    return MAX_RECORDING_OPTIONS.some(option => option.value === value)
+        ? value
+        : DEFAULT_MAX_RECORDING_MINUTES;
+};
+
+/** Durée maximale en secondes (Infinity lorsque aucune limite n'est fixée). */
+export const maxRecordingSeconds = (minutes) => (minutes > 0 ? minutes * 60 : Infinity);
+
+/** Vrai si la durée écoulée atteint la limite configurée. */
+export const isRecordingLimitReached = (elapsedSeconds, maxMinutes) =>
+    Boolean(maxMinutes > 0) && elapsedSeconds >= maxMinutes * 60;
+
+/** Libellé lisible d'une limite en minutes (pour les notifications). */
+export const formatRecordingLimit = (minutes) => {
+    if (!minutes || minutes <= 0) return 'illimité';
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    if (rest) return `${hours} h ${rest}`;
+    return hours === 1 ? '1 heure' : `${hours} heures`;
+};
+
+/**
+ * Average level of a byte frequency array produced by an AnalyserNode
+ * (getByteFrequencyData). Returns 0..~128, 0 for an empty/missing array.
+ * Extracted from App.jsx so the VU-meter math is unit-testable without a
+ * browser.
+ */
+export const getAverageLevel = (dataArray) => {
+    if (!dataArray || !dataArray.length) return 0;
+    let values = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+        values += dataArray[i];
+    }
+    return values / dataArray.length;
+};
+
 export const trimSilence = async (audioBlob, audioContext = null) => {
     const shouldCloseContext = audioContext === null;
     const context = audioContext || new (window.AudioContext || window.webkitAudioContext)();

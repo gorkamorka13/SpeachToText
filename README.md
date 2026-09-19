@@ -25,11 +25,12 @@ Une plateforme web de pointe pour la transcription, la traduction et l'analyse i
 - **PDF Professionnel** :
   - **Justification Réelle** : Algorithme de justification sur-mesure pour un rendu parfait (support colonnes & multilingue).
   - **Support RTL** : Gestion avancée de l'Arabe et des écritures de droite à gauche.
-- **Persistance des Réglages** : Vos choix (langue, moteur, modèle, URL Whisper) sont sauvegardés localement.
-- **Arrêt Automatique sur Silence** : Détection des pauses prolongées (15s) pour stopper et sauvegarder.
+- **Persistance des Réglages** : Vos choix (langue, moteur, modèle, URL Whisper, durée d'enregistrement) sont sauvegardés localement.
+- **Arrêt Automatique sur Silence** : détection des pauses prolongées pour stopper et sauvegarder. Le délai est réglable dans les Paramètres : **30, 40 (défaut) ou 50 secondes**.
+- **Durée Maximale d'Enregistrement** : limite configurable (15 min → 3 h, **1 heure par défaut**, ou illimité). À l'échéance, l'enregistrement s'arrête et est sauvegardé automatiquement. Un badge dans la barre d'outils affiche la limite, puis le temps restant pendant l'enregistrement.
 
 ### 📊 Interface de Contrôle Premium
-- **VU-mètre en Temps Réel** : Visualisez l'intensité du signal micro.
+- **VU-mètre en Temps Réel** : l'intensité du signal micro est affichée **en permanence** (au repos comme pendant l'enregistrement), grâce à une surveillance continue qui ne dépend pas de l'enregistrement. Si le micro est refusé ou indisponible, le vu-mètre l'indique (« Micro bloqué ») au lieu de rester muet.
 - **Token Counter** : Suivez votre consommation de tokens Gemini.
 - **Design Adaptatif** : Interface "Glassmorphism" avec Mode Sombre/Clair automatique.
 
